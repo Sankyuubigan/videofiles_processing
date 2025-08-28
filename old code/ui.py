@@ -16,6 +16,7 @@ class UIControls:
         self.lbl_status = None
         self.btn_compress = None
         self.btn_browse = None
+        self.file_picker = None
 
 def build_ui(page: ft.Page, handlers: dict, initial_state: dict):
     """Строит пользовательский интерфейс и возвращает класс со ссылками на элементы."""
@@ -25,26 +26,33 @@ def build_ui(page: ft.Page, handlers: dict, initial_state: dict):
     # --- FilePicker ---
     file_picker = ft.FilePicker(on_result=handlers["on_file_picked"])
     page.overlay.append(file_picker)
+    controls.file_picker = file_picker
 
-    # --- «Зона» загрузки, теперь просто кликабельный контейнер ---
-    controls.drop_zone = ft.Container(
-        content=ft.Row(
-            [
-                ft.Icon("upload_file", size=40, color="bluegrey300"),
-                ft.Text("Нажмите или перетащите видео сюда", color="bluegrey300", size=14)
-            ],
-            alignment=ft.MainAxisAlignment.CENTER
+    # --- «Зона» загрузки с поддержкой перетаскивания ---
+    controls.drop_zone = ft.DragTarget(
+        group="video",
+        content=ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon("upload_file", size=40, color="bluegrey300"),
+                    ft.Text("Нажмите или перетащите видео сюда", color="bluegrey300", size=14)
+                ],
+                alignment=ft.MainAxisAlignment.CENTER
+            ),
+            width=float('inf'),
+            height=100,
+            bgcolor="white12",
+            border_radius=8,
+            alignment=ft.alignment.center,
+            ink=True,  # визуальный эффект нажатия
+            on_click=lambda _: file_picker.pick_files(
+                dialog_title="Выберите видеофайл",
+                allowed_extensions=list(OUTPUT_EXTENSIONS.keys())
+            )
         ),
-        width=float('inf'),
-        height=100,
-        bgcolor="white12",
-        border_radius=8,
-        alignment=ft.alignment.center,
-        ink=True,  # визуальный эффект нажатия
-        on_click=lambda _: file_picker.pick_files(
-            dialog_title="Выберите видеофайл",
-            allowed_extensions=list(OUTPUT_EXTENSIONS.keys())
-        )
+        on_accept=handlers["on_drag_accept"],
+        on_will_accept=handlers["on_drag_will_accept"],
+        on_leave=handlers["on_drag_leave"]
     )
 
     controls.btn_browse = ft.OutlinedButton(

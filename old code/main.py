@@ -72,7 +72,8 @@ class AppController:
     # --- Методы обновления UI ---
     
     def show_snackbar(self, message: str, color=ft.Colors.GREEN, duration_ms=4000):
-        self.page.show_snack_bar(ft.SnackBar(ft.Text(message, weight=ft.FontWeight.BOLD), open=True, bgcolor=color, duration=duration_ms))
+        self.page.snack_bar = ft.SnackBar(ft.Text(message, weight=ft.FontWeight.BOLD), open=True, bgcolor=color, duration=duration_ms)
+        self.page.update()
 
     def update_ui_after_file_selection(self, filepath):
         self.state.reset_file_specific_state()
@@ -120,7 +121,7 @@ class AppController:
         
         controls_to_toggle = [
             self.controls.btn_browse, self.controls.dd_output_ext, self.controls.slider_crf, 
-            self.controls.switch_force_vfr_fix, self.controls.btn_compress, self.controls.drag_target_container
+            self.controls.switch_force_vfr_fix, self.controls.btn_compress, self.controls.drop_zone
         ]
         for ctrl in controls_to_toggle:
             ctrl.disabled = is_processing
@@ -140,14 +141,16 @@ class AppController:
 
     def handle_file_picked(self, e: ft.FilePickerResultEvent):
         if e.files:
-            self.update_ui_after_file_selection(e.files.path)
+            # e.files - это список файлов, берем первый
+            self.update_ui_after_file_selection(e.files[0].path)
 
-    def handle_drag_accept(self, e):
-        filepath = e.src
-        if filepath:
-            self.update_ui_after_file_selection(filepath)
-        e.control.border = None
-        e.control.update()
+    def handle_drag_accept(self, e: ft.DragTargetEvent):
+        # Открываем FilePicker при перетаскивании
+        # Это временное решение, пока Flet не поддерживает прямое перетаскивание файлов из ОС
+        self.controls.file_picker.pick_files(
+            dialog_title="Выберите видеофайл",
+            allowed_extensions=list(OUTPUT_EXTENSIONS.keys())
+        )
 
     def handle_drag_will_accept(self, e):
         e.control.border = ft.border.all(3, ft.Colors.GREEN_ACCENT_400) if e.data == "true" else ft.border.all(3, ft.Colors.RED)
@@ -180,32 +183,32 @@ class AppController:
         current_input, success, error_msg = input_file, True, ""
 
         if self.state.force_vfr_fix or self.state.vfr_fix_recommended:
-            self.page.run_thread_safe(lambda: self.set_ui_processing_state(True, "Починка VFR"))
+            self.page.run_thread(lambda: self.set_ui_processing_state(True, "Починка VFR"))
             success, error_msg = fix_vfr(
                 input_file, temp_file, DEFAULT_FPS_FIX, DEFAULT_FIX_CRF_H264, DEFAULT_FIX_CRF_VP9, 
                 self.state.output_extension_key, 
-                lambda p: self.page.run_thread_safe(lambda: self.update_progress_ui(p)), 
+                lambda p: self.page.run_thread(lambda: self.update_progress_ui(p)), 
                 self.state.video_duration_seconds
             )
             if success: current_input = temp_file
 
         if success:
-            self.page.run_thread_safe(lambda: self.set_ui_processing_state(True, "Сжатие"))
+            self.page.run_thread(lambda: self.set_ui_processing_state(True, "Сжатие"))
             details = OUTPUT_EXTENSIONS[self.state.output_extension_key]
             success, error_msg = compress_video(
                 current_input, final_file, details, self.state.crf_value,
-                lambda p: self.page.run_thread_safe(lambda: self.update_progress_ui(p)),
+                lambda p: self.page.run_thread(lambda: self.update_progress_ui(p)),
                 self.state.video_duration_seconds
             )
 
         if success:
-            self.page.run_thread_safe(lambda: self.show_snackbar(f"Успешно! Сохранено: {final_file}"))
+            self.page.run_thread(lambda: self.show_snackbar(f"Успешно! Сохранено: {final_file}"))
         else:
-            self.page.run_thread_safe(lambda: self.show_snackbar(error_msg, ft.Colors.RED))
+            self.page.run_thread(lambda: self.show_snackbar(error_msg, ft.Colors.RED))
 
         if os.path.exists(temp_file): os.remove(temp_file)
-        self.page.run_thread_safe(lambda: self.set_ui_processing_state(False))
-        self.page.run_thread_safe(lambda: self.update_ui_after_file_selection(None))
+        self.page.run_thread(lambda: self.set_ui_processing_state(False))
+        self.page.run_thread(lambda: self.update_ui_after_file_selection(None))
 
     def start_processing_thread(self, e=None):
         if self.state.is_processing: return
