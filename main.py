@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
-from config import (OUTPUT_EXTENSIONS, DEFAULT_OUTPUT_EXTENSION_KEY, 
+from config import (OUTPUT_FORMATS, CODECS, DEFAULT_OUTPUT_FORMAT_KEY, DEFAULT_CODEC_KEY,
                    DEFAULT_USE_HARDWARE_ENCODING)
 from video_processor import VideoProcessor
 from ffmpeg_downloader import FFmpegDownloader
@@ -79,6 +79,7 @@ class WorkerThread(QThread):
         self.processor = processor
         self.mode = mode
         self.kwargs = kwargs
+        self.process = None
 
     def run(self):
         try:
@@ -91,6 +92,7 @@ class WorkerThread(QThread):
             elif self.mode == 'compress':
                 result = self.processor.compress_video(
                     progress_callback=self.progress_updated.emit,
+                    process_setter=self.set_process,
                     **self.kwargs
                 )
                 self.finished.emit(result)
@@ -98,6 +100,24 @@ class WorkerThread(QThread):
             import traceback
             traceback.print_exc()
             self.error_occurred.emit(str(e))
+    
+    def set_process(self, process):
+        """Сохраняет ссылку на процесс FFmpeg для возможности остановки"""
+        self.process = process
+    
+    def stop(self):
+        """Останавливает процесс сжатия"""
+        if self.process:
+            try:
+                self.process.terminate()
+                # Даем процессу время на завершение
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # Если процесс не завершился, принудительно убиваем
+                self.process.kill()
+            except Exception:
+                # Игнорируем другие ошибки при остановке
+                pass
 
 
 class MainWindow(QMainWindow):
@@ -110,6 +130,7 @@ class MainWindow(QMainWindow):
         self.compression_worker = None
         self.active_workers = []
         self._cached_info = None
+        self.processing_stopped = False  # Флаг для остановки всей очереди
         self.init_ui()
 
     def init_ui(self):
@@ -191,12 +212,21 @@ class MainWindow(QMainWindow):
         format_layout = QHBoxLayout()
         format_layout.addWidget(QLabel("Формат:"))
         self.format_combo = QComboBox()
-        for ext in OUTPUT_EXTENSIONS.keys():
+        for ext, details in OUTPUT_FORMATS.items():
             self.format_combo.addItem(f".{ext.upper()}", ext)
-        self.format_combo.setCurrentText(f".{DEFAULT_OUTPUT_EXTENSION_KEY.upper()}")
+        self.format_combo.setCurrentText(f".{DEFAULT_OUTPUT_FORMAT_KEY.upper()}")
         self.format_combo.currentTextChanged.connect(self.on_format_changed)
         format_layout.addWidget(self.format_combo)
         format_layout.addStretch()
+        
+        # Выбор кодека
+        codec_layout = QHBoxLayout()
+        codec_layout.addWidget(QLabel("Кодек:"))
+        self.codec_combo = QComboBox()
+        self.update_codec_options()
+        self.codec_combo.currentTextChanged.connect(self.on_codec_changed)
+        codec_layout.addWidget(self.codec_combo)
+        codec_layout.addStretch()
         
         # Выбор типа кодирования
         encoding_layout = QHBoxLayout()
@@ -232,6 +262,7 @@ class MainWindow(QMainWindow):
         vfr_layout.addStretch()
         
         settings_layout.addLayout(format_layout)
+        settings_layout.addLayout(codec_layout)
         settings_layout.addLayout(encoding_layout)
         settings_layout.addLayout(crf_layout)
         settings_layout.addLayout(vfr_layout)
@@ -241,12 +272,26 @@ class MainWindow(QMainWindow):
     def create_process_group(self):
         process_group = QGroupBox("3. Запуск обработки")
         process_layout = QVBoxLayout()
+        
+        # Кнопки управления процессом
+        buttons_layout = QHBoxLayout()
         self.process_btn = QPushButton("Сжать видео")
         self.process_btn.clicked.connect(self.start_processing)
         self.process_btn.setEnabled(False)
+        
+        self.cancel_btn = QPushButton("Отменить")
+        self.cancel_btn.clicked.connect(self.cancel_processing)
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setVisible(False)
+        
+        buttons_layout.addWidget(self.process_btn)
+        buttons_layout.addWidget(self.cancel_btn)
+        buttons_layout.addStretch()
+        
+        process_layout.addLayout(buttons_layout)
+        
         self.progress_bar = QProgressBar()
         self.status_label = QLabel("Готов к работе")
-        process_layout.addWidget(self.process_btn)
         process_layout.addWidget(self.progress_bar)
         process_layout.addWidget(self.status_label)
         process_group.setLayout(process_layout)
@@ -355,17 +400,47 @@ class MainWindow(QMainWindow):
         self.update_estimated_size(self.crf_slider.value(), self.current_codec())
 
     def current_codec(self):
-        ext = self.format_combo.currentData()
-        return OUTPUT_EXTENSIONS[ext]["codec"]
+        return self.codec_combo.currentData()
+
+    def update_codec_options(self):
+        """Обновляет список доступных кодеков на основе выбранного формата."""
+        self.codec_combo.clear()
+        current_format = self.format_combo.currentData()
+        compatible_codecs = OUTPUT_FORMATS[current_format]["compatible_codecs"]
+        
+        for codec_key in compatible_codecs:
+            codec_name = CODECS[codec_key]["name"]
+            self.codec_combo.addItem(codec_name, codec_key)
+        
+        # Устанавливаем кодек по умолчанию для текущего формата
+        default_codec = OUTPUT_FORMATS[current_format]["default_codec"]
+        index = self.codec_combo.findData(default_codec)
+        if index >= 0:
+            self.codec_combo.setCurrentIndex(index)
 
     def on_format_changed(self):
-        ext = self.format_combo.currentData()
-        details = OUTPUT_EXTENSIONS.get(ext, OUTPUT_EXTENSIONS[DEFAULT_OUTPUT_EXTENSION_KEY])
-        self.crf_slider.setRange(details["crf_min"], details["crf_max"])
-        self.crf_slider.setValue(details["crf_default"])
-        self.on_crf_changed(details["crf_default"])
-        self.update_estimated_size(self.crf_slider.value(), details["codec"])
+        # Обновляем список доступных кодеков
+        self.update_codec_options()
+        
+        # Обновляем настройки CRF
+        codec_key = self.codec_combo.currentData()
+        codec_details = CODECS.get(codec_key, CODECS[DEFAULT_CODEC_KEY])
+        self.crf_slider.setRange(codec_details["crf_min"], codec_details["crf_max"])
+        self.crf_slider.setValue(codec_details["crf_default"])
+        self.on_crf_changed(codec_details["crf_default"])
+        self.update_estimated_size(self.crf_slider.value(), codec_key)
         # Обновляем таблицу при изменении формата
+        self.update_queue_table()
+
+    def on_codec_changed(self):
+        # Обновляем настройки CRF при изменении кодека
+        codec_key = self.codec_combo.currentData()
+        codec_details = CODECS.get(codec_key, CODECS[DEFAULT_CODEC_KEY])
+        self.crf_slider.setRange(codec_details["crf_min"], codec_details["crf_max"])
+        self.crf_slider.setValue(codec_details["crf_default"])
+        self.on_crf_changed(codec_details["crf_default"])
+        self.update_estimated_size(self.crf_slider.value(), codec_key)
+        # Обновляем таблицу при изменении кодека
         self.update_queue_table()
 
     def on_encoding_changed(self):
@@ -429,15 +504,53 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             self.log_text.append("Предупреждение: Сначала выберите файл")
             return
+        
+        # Сбрасываем флаг остановки при начале новой обработки
+        self.processing_stopped = False
+        
         params = {
             "input_path": self.current_file,
             "output_format": self.format_combo.currentData(),
+            "codec": self.codec_combo.currentData(),
             "crf_value": self.crf_slider.value(),
             "force_vfr_fix": self.vfr_checkbox.isChecked(),
             "use_hardware": self.hardware_radio.isChecked()
         }
         self.set_ui_enabled(False)
         self.run_compression_worker(**params)
+
+    def cancel_processing(self):
+        # Показываем диалог подтверждения
+        reply = QMessageBox.question(
+            self, "Подтверждение отмены",
+            "Вы уверены, что хотите отменить процесс сжатия и всю очередь?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # Устанавливаем флаг остановки всей очереди
+            self.processing_stopped = True
+            if self.compression_worker:
+                self.log_text.append("Отмена процесса сжатия и всей очереди...")
+                self.status_label.setText("Отмена процесса...")
+                self.compression_worker.stop()
+                # Небольшая задержка, чтобы процесс успел завершиться
+                QTimer.singleShot(1000, self.on_canceled)
+
+    def on_canceled(self):
+        self.log_text.append("Процесс сжатия и обработка очереди отменены пользователем")
+        self.status_label.setText("Отменено пользователем")
+        self.progress_bar.setValue(0)
+        
+        # Возвращаем интерфейс в исходное состояние
+        self.current_file = None
+        self.current_info = None
+        self.set_ui_enabled(True)
+        self.file_label.setText("Перетащите файлы сюда или нажмите 'Выбрать'")
+        self.status_label.setText("Готов к работе")
+        self.progress_bar.setValue(0)
+        self.info_btn.setEnabled(False)
+        self.process_btn.setEnabled(False)
 
     def run_compression_worker(self, **kwargs):
         self.compression_worker = WorkerThread(self.processor, 'compress', **kwargs)
@@ -469,21 +582,35 @@ class MainWindow(QMainWindow):
     def update_progress(self, value, message):
         self.progress_bar.setValue(value)
         self.status_label.setText(message)
-        if value % 5 == 0 or value == 100:
-            self.log_text.append(message)
+        # Не добавляем сообщения о прогрессе в лог, только важные события
 
     def on_finished(self, result):
         self.log_text.append(f"Готово: {result}")
-        self.process_next_file()
+        # Проверяем, не был ли процесс остановлен
+        if not self.processing_stopped:
+            self.process_next_file()
+        else:
+            # Если процесс был остановлен, не продолжаем обработку очереди
+            self.on_canceled()
 
     def on_error(self, error):
         self.log_text.append(f"ОШИБКА: {error}")
         self.status_label.setText("Ошибка при обработке!")
         if self.sender() == self.compression_worker:
             self.compression_worker = None
-        self.process_next_file()
+        # Проверяем, не был ли процесс остановлен
+        if not self.processing_stopped:
+            self.process_next_file()
+        else:
+            # Если процесс был остановлен, не продолжаем обработку очереди
+            self.on_canceled()
 
     def process_next_file(self):
+        # Проверяем, не был ли процесс остановлен
+        if self.processing_stopped:
+            self.on_canceled()
+            return
+            
         # Удаляем обработанный файл из очереди
         if self.current_file:
             # Ищем и удаляем текущий файл из очереди
@@ -508,8 +635,11 @@ class MainWindow(QMainWindow):
     def set_ui_enabled(self, enabled):
         self.select_file_btn.setEnabled(enabled)
         self.process_btn.setEnabled(enabled and self.current_file is not None)
+        self.cancel_btn.setEnabled(not enabled and self.current_file is not None)
+        self.cancel_btn.setVisible(not enabled and self.current_file is not None)
         self.info_btn.setEnabled(enabled and self.current_file is not None)
         self.format_combo.setEnabled(enabled)
+        self.codec_combo.setEnabled(enabled)
         self.crf_slider.setEnabled(enabled)
         self.vfr_checkbox.setEnabled(enabled)
         self.hardware_radio.setEnabled(enabled)
@@ -521,6 +651,8 @@ class MainWindow(QMainWindow):
                                          "Процесс сжатия еще не завершен. Вы уверены, что хотите выйти?",
                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply == QMessageBox.Yes:
+                if self.compression_worker:
+                    self.compression_worker.stop()
                 self.compression_worker.quit()
                 self.compression_worker.wait(5000)
                 event.accept()
