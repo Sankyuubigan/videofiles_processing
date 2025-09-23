@@ -181,9 +181,18 @@ class VideoProcessor:
             if not video_stream: return {"error": "Видеопоток не найден"}
             format_info = data.get("format", {})
             duration = float(format_info.get("duration", 0))
-            # Получаем точный размер файла в байтах
-            size_bytes = int(format_info.get("size", 0))
+            
+            # Получаем точный размер файла напрямую из файловой системы
+            try:
+                size_bytes = os.path.getsize(input_path)
+                print(f"[DEBUG] get_video_info: Actual file size from filesystem: {size_bytes} bytes")
+            except Exception as e:
+                print(f"[DEBUG] get_video_info: Error getting file size: {e}")
+                size_bytes = int(format_info.get("size", 0))
+            
             size_mb = size_bytes / (1024 * 1024)
+            print(f"[DEBUG] get_video_info: File size in MB: {size_mb:.2f} MB")
+            
             # Получаем битрейт из формата, если он доступен
             total_bitrate = int(format_info.get("bit_rate", 0))
             # Если битрейт в формате не указан, рассчитываем его вручную
@@ -209,6 +218,10 @@ class VideoProcessor:
             gpu_info = self.get_gpu_info()
             # Рассчитываем оценку, используя новый метод
             est_size = self.estimated_size_mb(video_bitrate, audio_bitrate, duration, DEFAULT_CRF_H264, "libx264", needs_vfr_fix, False)
+            
+            # Проверяем, является ли видео HEVC
+            is_hevc = video_stream.get("codec_name", "").lower() in ["hevc", "h265"]
+            
             return {
                 "path": input_path,
                 "duration": duration,
@@ -223,6 +236,7 @@ class VideoProcessor:
                 "height": int(video_stream.get("height", 0)),
                 "fps": fps,
                 "needs_vfr_fix": needs_vfr_fix,
+                "is_hevc": is_hevc,
             }
         except Exception as e:
             return {"error": f"Исключение при получении информации: {str(e)}"}
@@ -254,7 +268,7 @@ class VideoProcessor:
             if needs_fix:
                 def vfr_progress(p, m): 
                     progress_callback(10 + int(p * 0.4), m) if progress_callback else None
-                success, msg = self.fix_vfr_target_crf(current_input, str(output_file), output_format, crf_value, vfr_progress, duration, use_hardware)
+                success, msg = self.fix_vfr_target_crf(current_input, str(output_file), output_format, crf_value, vfr_progress, duration, use_hardware, video_info)
                 if not success: 
                     print(f"[ERROR] Ошибка при исправлении VFR: {msg}")
                     raise Exception(f"Ошибка VFR-fix: {msg}")
@@ -274,11 +288,16 @@ class VideoProcessor:
 
     def fix_vfr_target_crf(self, input_path: str, output_path: str,
                         output_format: str, crf_value: int,
-                        progress_callback: Optional[Callable], duration_seconds: float, use_hardware: bool = False) -> tuple[bool, str]:
+                        progress_callback: Optional[Callable], duration_seconds: float, use_hardware: bool = False, video_info: dict = None) -> tuple[bool, str]:
         gpu_info = self.get_gpu_info()
         has_nvenc = "NVIDIA NVENC" in gpu_info
         # Формируем базовую команду FFmpeg
         cmd = [self.ffmpeg_path, "-y", "-i", input_path]
+        
+        # Для HEVC видео добавляем дополнительные параметры для корректного декодирования
+        if video_info and video_info.get("is_hevc", False):
+            cmd.extend(["-c:v", "hevc_cuvid"])  # Используем аппаратный декодер HEVC, если доступно
+        
         # Добавляем фильтр для исправления VFR
         cmd.extend(["-vf", f"fps={DEFAULT_FPS_FIX}"])
         
@@ -324,6 +343,10 @@ class VideoProcessor:
         
         # Формируем базовую команду FFmpeg
         cmd = [self.ffmpeg_path, "-y", "-i", input_path]
+        
+        # Для HEVC видео добавляем дополнительные параметры для корректного декодирования
+        if video_info.get("is_hevc", False):
+            cmd.extend(["-c:v", "hevc_cuvid"])  # Используем аппаратный декодер HEVC, если доступно
         
         # Настраиваем кодеки в зависимости от формата и наличия GPU
         if output_format == "webm":

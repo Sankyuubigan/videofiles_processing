@@ -320,6 +320,7 @@ class MainWindow(QMainWindow):
                 needs_vfr_fix=needs_vfr or force_vfr_fix,
                 use_hardware=use_hardware
             )
+            print(f"[DEBUG] Таблица: Расчетный размер для {os.path.basename(file_path)}: {est_size:.2f} МБ (CRF={crf_value})")
             est_item = QTableWidgetItem(f"{est_size:.1f} МБ")
             self.queue_table.setItem(row, 3, est_item)
         
@@ -402,6 +403,7 @@ class MainWindow(QMainWindow):
             needs_vfr_fix=info.get('needs_vfr_fix', False) or self.vfr_checkbox.isChecked(),
             use_hardware=self.hardware_radio.isChecked()
         )
+        print(f"[DEBUG] Текущий файл: Расчетный размер: {est:.2f} МБ (CRF={crf})")
 
         self.estimated_label.setText(f"Примерный размер после сжатия: {est:.1f} МБ")
 
@@ -425,7 +427,7 @@ class MainWindow(QMainWindow):
 
     def start_processing(self):
         if not self.current_file:
-            QMessageBox.warning(self, "Предупреждение", "Сначала выберите файл")
+            self.log_text.append("Предупреждение: Сначала выберите файл")
             return
         params = {
             "input_path": self.current_file,
@@ -477,7 +479,6 @@ class MainWindow(QMainWindow):
     def on_error(self, error):
         self.log_text.append(f"ОШИБКА: {error}")
         self.status_label.setText("Ошибка при обработке!")
-        QMessageBox.critical(self, "Ошибка", f"Произошла ошибка:\n{error}")
         if self.sender() == self.compression_worker:
             self.compression_worker = None
         self.process_next_file()
@@ -537,8 +538,7 @@ def main():
     if not os.path.exists("ffmpeg.exe") or not os.path.exists("ffprobe.exe"):
         downloader = FFmpegDownloader()
         if not downloader.check_and_download():
-            QMessageBox.critical(None, "Критическая ошибка",
-                                 "FFmpeg не найден и не может быть скачан. Приложение будет закрыто.")
+            print("Критическая ошибка: FFmpeg не найден и не может быть скачан. Приложение будет закрыто.")
             return -1
     window = MainWindow()
     window.show()
