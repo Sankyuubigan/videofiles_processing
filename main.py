@@ -1,234 +1,549 @@
-# main.py
-import flet as ft
+import sys
 import os
-import threading
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                               QHBoxLayout, QPushButton, QLabel, QFileDialog,
+                               QProgressBar, QTextEdit, QGroupBox,
+                               QMessageBox, QComboBox, QCheckBox, QSlider,
+                               QDialog, QTextBrowser, QRadioButton, QButtonGroup,
+                               QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
+from config import (OUTPUT_EXTENSIONS, DEFAULT_OUTPUT_EXTENSION_KEY, 
+                   DEFAULT_USE_HARDWARE_ENCODING)
+from video_processor import VideoProcessor
+from ffmpeg_downloader import FFmpegDownloader
 
-from config import (
-    OUTPUT_EXTENSIONS, DEFAULT_OUTPUT_EXTENSION_KEY,
-    DEFAULT_FPS_FIX, DEFAULT_FIX_CRF_H264, DEFAULT_FIX_CRF_VP9,
-    TEMP_FIXED_VIDEO_SUFFIX, COMPRESSED_VIDEO_SUFFIX,
-    FFMPEG_PATH, FFPROBE_PATH
-)
-from ffmpeg_utils import (
-    get_video_info, needs_vfr_fix, get_video_duration_seconds,
-    fix_vfr, compress_video
-)
-from ui import build_ui
 
-class AppState:
-    """Хранит состояние данных приложения."""
-    def __init__(self):
-        self.input_filepath = None
-        self.output_extension_key = DEFAULT_OUTPUT_EXTENSION_KEY
-        self.crf_value = OUTPUT_EXTENSIONS[DEFAULT_OUTPUT_EXTENSION_KEY]["crf_default"]
-        self.force_vfr_fix = False
-        self.vfr_fix_recommended = False
-        self.is_processing = False
-        self.video_duration_seconds = None
-        self.current_operation_name = ""
+class VideoInfoDialog(QDialog):
+    def __init__(self, video_info, parent=None):
+        super().__init__(parent)
+        self.video_info = video_info
+        self.setWindowTitle("Информация о видео")
+        self.setModal(True)
+        self.resize(500, 400)
+        self.setup_ui()
 
-    def reset_file_specific_state(self):
-        self.input_filepath = None
-        self.vfr_fix_recommended = False
-        self.video_duration_seconds = None
-
-    def get_initial_ui_state(self):
-        """Возвращает словарь с начальными значениями для UI."""
-        return {
-            "output_extension_key": self.output_extension_key,
-            "crf_value": self.crf_value,
-            "force_vfr_fix": self.force_vfr_fix,
-        }
-
-class AppController:
-    """Управляет состоянием приложения и взаимодействием с UI."""
-    def __init__(self, page: ft.Page):
-        self.page = page
-        self.state = AppState()
-        self.controls = None  # Будет заполнено функцией build_ui
-
-    def initialize(self):
-        """Основной метод для инициализации приложения."""
-        self.page.title = "Flet Video Compressor"
-        self.page.window_width = 700
-        self.page.window_height = 720
-        self.page.padding = ft.padding.all(15)
-        self.page.theme_mode = ft.ThemeMode.DARK
-
-        handlers = {
-            "on_file_picked": self.handle_file_picked,
-            "on_drag_accept": self.handle_drag_accept,
-            "on_drag_will_accept": self.handle_drag_will_accept,
-            "on_drag_leave": self.handle_drag_leave,
-            "on_extension_change": self.handle_extension_change,
-            "on_crf_change": self.handle_crf_change,
-            "on_force_fix_change": self.handle_force_fix_change,
-            "on_compress_click": self.start_processing_thread,
-        }
-
-        self.controls = build_ui(self.page, handlers, self.state.get_initial_ui_state())
-        self.page.update()
-
-    # --- Методы обновления UI ---
-    
-    def show_snackbar(self, message: str, color=ft.Colors.GREEN, duration_ms=4000):
-        self.page.snack_bar = ft.SnackBar(ft.Text(message, weight=ft.FontWeight.BOLD), open=True, bgcolor=color, duration=duration_ms)
-        self.page.update()
-
-    def update_ui_after_file_selection(self, filepath):
-        self.state.reset_file_specific_state()
-        self.state.input_filepath = filepath
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        title = QLabel("Информация о файле")
+        title_font = QFont()
+        title_font.setPointSize(16)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        layout.addWidget(title)
+        info_text = QTextBrowser()
+        audio_info = ""
+        audio_tracks = self.video_info.get('audio_tracks', [])
+        if audio_tracks:
+            audio_info = f"<b>Аудиодорожки:</b> {len(audio_tracks)}<br>"
+            for i, track in enumerate(audio_tracks):
+                lang = track.get('language', 'und')
+                title_str = track.get('title', f'Audio {i+1}')
+                channels = track.get('channels', 0)
+                audio_info += f"&nbsp;&nbsp;• {title_str} ({lang}, {channels}ch)<br>"
+        else:
+            audio_info = "<b>Аудиодорожки:</b> Не найдены<br>"
         
-        if filepath:
-            self.controls.txt_selected_file_info.value = os.path.basename(filepath)
-            self.controls.txt_selected_file_info.italic, self.controls.txt_selected_file_info.color = False, ft.Colors.GREEN_ACCENT_200
-            self.controls.btn_compress.disabled = False
-            info, err = get_video_info(filepath)
-            if err:
-                self.show_snackbar(f"Ошибка анализа: {err}", ft.Colors.RED)
-                self.controls.lbl_vfr_status.value, self.controls.lbl_vfr_status.color = "Ошибка", ft.Colors.RED
-            elif info:
-                self.state.video_duration_seconds = get_video_duration_seconds(info)
-                if needs_vfr_fix(info):
-                    self.controls.lbl_vfr_status.value, self.controls.lbl_vfr_status.color = "Рекомендуется!", ft.Colors.ORANGE_ACCENT_400
-                    self.state.vfr_fix_recommended = True
+        needs_vfr_text = "Да" if self.video_info.get('needs_vfr_fix') else "Нет"
+        
+        info_html = f"""
+        <b>Путь:</b> {self.video_info.get('path', 'N/A')}<br>
+        <b>Размер:</b> {self.video_info.get('size_mb', 0):.2f} МБ<br>
+        <b>Длительность:</b> {self.video_info.get('duration', 0):.2f} сек<br>
+        <b>Разрешение:</b> {self.video_info.get('width', 0)}x{self.video_info.get('height', 0)}<br>
+        <b>FPS:</b> {self.video_info.get('fps', 0):.2f}<br>
+        <b>Битрейт видео:</b> {self.video_info.get('video_bitrate', 0) // 1000} кбит/с<br>
+        <b>Битрейт аудио:</b> {self.video_info.get('audio_bitrate', 0) // 1000} кбит/с<br>
+        <b>Требуется VFR fix:</b> {needs_vfr_text}<br>
+        <b>Примерный размер после сжатия:</b> {self.video_info.get('estimated_size_mb', 0):.2f} МБ<br>
+        {audio_info}
+        <b>GPU:</b> {self.video_info.get('gpu_info', 'N/A')}<br>
+        <b>Режим обработки:</b> {self.video_info.get('processing_mode', 'N/A')}
+        """
+        info_text.setHtml(info_html)
+        layout.addWidget(info_text)
+        close_btn = QPushButton("Закрыть")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+        self.setLayout(layout)
+
+
+class WorkerThread(QThread):
+    progress_updated = Signal(int, str)
+    finished = Signal(str)
+    error_occurred = Signal(str)
+    info_ready = Signal(dict)
+
+    def __init__(self, processor, mode, **kwargs):
+        super().__init__()
+        self.processor = processor
+        self.mode = mode
+        self.kwargs = kwargs
+
+    def run(self):
+        try:
+            if self.mode == 'info':
+                info = self.processor.get_video_info(self.kwargs['input_path'])
+                if "error" in info:
+                    self.error_occurred.emit(info["error"])
                 else:
-                    self.controls.lbl_vfr_status.value, self.controls.lbl_vfr_status.color = "Не требуется", ft.Colors.GREEN_ACCENT_400
+                    self.info_ready.emit(info)
+            elif self.mode == 'compress':
+                result = self.processor.compress_video(
+                    progress_callback=self.progress_updated.emit,
+                    **self.kwargs
+                )
+                self.finished.emit(result)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.error_occurred.emit(str(e))
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.processor = VideoProcessor()
+        self.file_queue = []  # Список кортежей (путь, информация_о_файле)
+        self.current_file = None
+        self.current_info = None
+        self.compression_worker = None
+        self.active_workers = []
+        self._cached_info = None
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("Video Compressor")
+        self.setGeometry(100, 100, 1000, 700)
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+
+        file_group = self.create_file_group()
+        main_layout.addWidget(file_group)
+
+        # Группа с таблицей очереди
+        queue_group = QGroupBox("Очередь файлов")
+        queue_layout = QVBoxLayout()
+        
+        # Создаем таблицу для очереди файлов
+        self.queue_table = QTableWidget()
+        self.queue_table.setColumnCount(4)
+        self.queue_table.setHorizontalHeaderLabels(["Имя файла", "Размер", "Статус VFR", "Примерный размер после сжатия"])
+        self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.queue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.queue_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.queue_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.queue_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.queue_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.queue_table.setAlternatingRowColors(True)
+        
+        queue_layout.addWidget(self.queue_table)
+        queue_group.setLayout(queue_layout)
+        main_layout.addWidget(queue_group)
+
+        self.estimated_label = QLabel("Примерный размер после сжатия: —")
+        main_layout.addWidget(self.estimated_label)
+
+        settings_group = self.create_settings_group()
+        main_layout.addWidget(settings_group)
+
+        process_group = self.create_process_group()
+        main_layout.addWidget(process_group)
+
+        log_group = QGroupBox("Лог")
+        log_layout = QVBoxLayout()
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        log_layout.addWidget(self.log_text)
+        log_group.setLayout(log_layout)
+        main_layout.addWidget(log_group)
+
+        self.on_format_changed()
+        self.setAcceptDrops(True)
+
+    def create_file_group(self):
+        file_group = QGroupBox("1. Выбор видеофайла")
+        file_layout = QVBoxLayout()
+        file_select_layout = QHBoxLayout()
+        self.file_label = QLabel("Перетащите файлы сюда или нажмите 'Выбрать'")
+        self.file_label.setWordWrap(True)
+        self.select_file_btn = QPushButton("Выбрать файл(ы)")
+        self.select_file_btn.clicked.connect(self.select_files)
+        self.info_btn = QPushButton("Информация о файле")
+        self.info_btn.clicked.connect(self.show_info)
+        self.info_btn.setEnabled(False)
+        file_select_layout.addWidget(self.select_file_btn)
+        file_select_layout.addWidget(self.info_btn)
+        file_select_layout.addStretch()
+        file_layout.addLayout(file_select_layout)
+        file_layout.addWidget(self.file_label)
+        self.queue_label = QLabel("В очереди: 0 файлов")
+        file_layout.addWidget(self.queue_label)
+        file_group.setLayout(file_layout)
+        return file_group
+
+    def create_settings_group(self):
+        settings_group = QGroupBox("2. Настройки сжатия")
+        settings_layout = QVBoxLayout()
+        
+        # Выбор формата
+        format_layout = QHBoxLayout()
+        format_layout.addWidget(QLabel("Формат:"))
+        self.format_combo = QComboBox()
+        for ext in OUTPUT_EXTENSIONS.keys():
+            self.format_combo.addItem(f".{ext.upper()}", ext)
+        self.format_combo.setCurrentText(f".{DEFAULT_OUTPUT_EXTENSION_KEY.upper()}")
+        self.format_combo.currentTextChanged.connect(self.on_format_changed)
+        format_layout.addWidget(self.format_combo)
+        format_layout.addStretch()
+        
+        # Выбор типа кодирования
+        encoding_layout = QHBoxLayout()
+        encoding_layout.addWidget(QLabel("Тип кодирования:"))
+        self.encoding_group = QButtonGroup(self)
+        self.hardware_radio = QRadioButton("Аппаратное (NVENC)")
+        self.software_radio = QRadioButton("Программное (CPU)")
+        self.encoding_group.addButton(self.hardware_radio)
+        self.encoding_group.addButton(self.software_radio)
+        if DEFAULT_USE_HARDWARE_ENCODING:
+            self.hardware_radio.setChecked(True)
         else:
-            self.controls.txt_selected_file_info.value, self.controls.txt_selected_file_info.italic = "Файл не выбран", True
-            self.controls.txt_selected_file_info.color = ft.Colors.BLUE_GREY_200
-            self.controls.btn_compress.disabled = True
-            self.controls.lbl_vfr_status.value, self.controls.lbl_vfr_status.color = "Не определено", None
-            self.controls.progress_bar.value = 0
+            self.software_radio.setChecked(True)
+        self.hardware_radio.toggled.connect(self.on_encoding_changed)
+        encoding_layout.addWidget(self.hardware_radio)
+        encoding_layout.addWidget(self.software_radio)
+        encoding_layout.addStretch()
         
-        self.page.update(self.controls.txt_selected_file_info, self.controls.lbl_vfr_status, self.controls.btn_compress, self.controls.progress_bar)
+        # Настройка CRF
+        crf_layout = QHBoxLayout()
+        self.crf_label = QLabel("CRF: ")
+        self.crf_slider = QSlider(Qt.Horizontal)
+        self.crf_slider.valueChanged.connect(self.on_crf_changed)
+        crf_layout.addWidget(self.crf_label)
+        crf_layout.addWidget(self.crf_slider)
+        
+        # Настройка VFR
+        vfr_layout = QHBoxLayout()
+        self.vfr_checkbox = QCheckBox("Принудительная починка VFR")
+        self.vfr_status_label = QLabel("Статус VFR: Не определено")
+        vfr_layout.addWidget(self.vfr_status_label)
+        vfr_layout.addWidget(self.vfr_checkbox)
+        vfr_layout.addStretch()
+        
+        settings_layout.addLayout(format_layout)
+        settings_layout.addLayout(encoding_layout)
+        settings_layout.addLayout(crf_layout)
+        settings_layout.addLayout(vfr_layout)
+        settings_group.setLayout(settings_layout)
+        return settings_group
 
-    def update_crf_slider(self, ext_key: str):
-        details = OUTPUT_EXTENSIONS.get(ext_key)
-        if not details: return
-        slider = self.controls.slider_crf
-        label = self.controls.slider_crf_label
-        
-        slider.min, slider.max, slider.divisions = details["crf_min"], details["crf_max"], details["crf_max"] - details["crf_min"]
-        self.state.crf_value = details["crf_default"]
-        slider.value = self.state.crf_value
-        label.value = f"CRF: {self.state.crf_value}"
-        self.page.update(slider, label)
+    def create_process_group(self):
+        process_group = QGroupBox("3. Запуск обработки")
+        process_layout = QVBoxLayout()
+        self.process_btn = QPushButton("Сжать видео")
+        self.process_btn.clicked.connect(self.start_processing)
+        self.process_btn.setEnabled(False)
+        self.progress_bar = QProgressBar()
+        self.status_label = QLabel("Готов к работе")
+        process_layout.addWidget(self.process_btn)
+        process_layout.addWidget(self.progress_bar)
+        process_layout.addWidget(self.status_label)
+        process_group.setLayout(process_layout)
+        return process_group
 
-    def set_ui_processing_state(self, is_processing: bool, operation_name=""):
-        self.state.is_processing = is_processing
-        self.state.current_operation_name = operation_name
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        urls = event.mimeData().urls()
+        for url in urls:
+            if url.isLocalFile():
+                self.add_file_to_queue(url.toLocalFile())
+        # Не запускаем обработку первого файла сразу, даем пользователю увидеть все файлы в очереди
+        self.update_queue_label()
+
+    def add_file_to_queue(self, file_path):
+        if os.path.isfile(file_path):
+            # Получаем информацию о файле
+            info = self.processor.get_video_info(file_path)
+            if "error" not in info:
+                self.file_queue.append((file_path, info))
+                self.update_queue_table()
+                self.update_queue_label()
+                print(f"Файл добавлен в очередь: {file_path}")
+                
+                # Если это первый файл и нет текущего файла, устанавливаем его как текущий
+                if len(self.file_queue) == 1 and self.current_file is None:
+                    self.current_file, self.current_info = self.file_queue[0]
+                    self.set_current_file(self.current_file, self.current_info)
+
+    def update_queue_table(self):
+        print(f"Обновление таблицы, файлов в очереди: {len(self.file_queue)}")
+        self.queue_table.setRowCount(len(self.file_queue))
         
-        controls_to_toggle = [
-            self.controls.btn_browse, self.controls.dd_output_ext, self.controls.slider_crf, 
-            self.controls.switch_force_vfr_fix, self.controls.btn_compress, self.controls.drop_zone
-        ]
-        for ctrl in controls_to_toggle:
-            ctrl.disabled = is_processing
+        # Получаем текущие настройки для расчета размера
+        crf_value = self.crf_slider.value()
+        codec = self.current_codec()
+        use_hardware = self.hardware_radio.isChecked()
+        force_vfr_fix = self.vfr_checkbox.isChecked()
+        
+        for row, (file_path, info) in enumerate(self.file_queue):
+            print(f"Добавление в таблицу: {os.path.basename(file_path)}")
+            # Имя файла
+            file_name_item = QTableWidgetItem(os.path.basename(file_path))
+            self.queue_table.setItem(row, 0, file_name_item)
             
-        self.controls.lbl_status.value = f"{operation_name}..." if is_processing else "Завершено."
-        self.controls.progress_bar.value = None if is_processing else 0
+            # Размер файла
+            size_mb = info.get("size_mb", 0)
+            size_item = QTableWidgetItem(f"{size_mb:.1f} МБ")
+            self.queue_table.setItem(row, 1, size_item)
+            
+            # Статус VFR
+            needs_vfr = info.get("needs_vfr_fix", False)
+            vfr_text = "Требуется" if needs_vfr else "Не требуется"
+            vfr_item = QTableWidgetItem(vfr_text)
+            if needs_vfr:
+                vfr_item.setForeground(Qt.GlobalColor.red)
+            else:
+                vfr_item.setForeground(Qt.GlobalColor.darkGreen)
+            self.queue_table.setItem(row, 2, vfr_item)
+            
+            # Примерный размер после сжатия с учетом текущих настроек
+            est_size = self.processor.estimated_size_mb(
+                video_bitrate=info.get("video_bitrate", 0),
+                audio_bitrate=info.get("audio_bitrate", 128000),
+                duration=info["duration"],
+                crf=crf_value,
+                codec=codec,
+                needs_vfr_fix=needs_vfr or force_vfr_fix,
+                use_hardware=use_hardware
+            )
+            est_item = QTableWidgetItem(f"{est_size:.1f} МБ")
+            self.queue_table.setItem(row, 3, est_item)
         
-        self.page.update(*controls_to_toggle, self.controls.lbl_status, self.controls.progress_bar)
+        # Принудительно обновляем отображение таблицы
+        self.queue_table.viewport().update()
 
-    def update_progress_ui(self, percent: int):
-        if not self.state.is_processing: return
-        self.controls.progress_bar.value = percent / 100.0 if percent != -1 else None
-        self.controls.lbl_status.value = f"{self.state.current_operation_name}: {percent}%" if percent != -1 else f"{self.state.current_operation_name}..."
-        self.page.update(self.controls.progress_bar, self.controls.lbl_status)
+    def process_first_in_queue(self):
+        if self.file_queue and self.current_file is None:
+            self.current_file, self.current_info = self.file_queue.pop(0)
+            self.update_queue_table()
+            self.set_current_file(self.current_file, self.current_info)
 
-    # --- Обработчики событий ---
+    def update_queue_label(self):
+        self.queue_label.setText(f"В очереди: {len(self.file_queue)} файлов")
 
-    def handle_file_picked(self, e: ft.FilePickerResultEvent):
-        if e.files:
-            # e.files - это список файлов, берем первый
-            self.update_ui_after_file_selection(e.files[0].path)
-
-    def handle_drag_accept(self, e: ft.DragTargetEvent):
-        # Открываем FilePicker при перетаскивании
-        # Это временное решение, пока Flet не поддерживает прямое перетаскивание файлов из ОС
-        self.controls.file_picker.pick_files(
-            dialog_title="Выберите видеофайл",
-            allowed_extensions=list(OUTPUT_EXTENSIONS.keys())
+    def select_files(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Выберите видеофайлы", "",
+            "Video files (*.mp4 *.avi *.mkv *.mov *.webm)"
         )
+        if files:
+            for file in files:
+                self.add_file_to_queue(file)
+            # Не запускаем обработку первого файла сразу
 
-    def handle_drag_will_accept(self, e):
-        e.control.border = ft.border.all(3, ft.Colors.GREEN_ACCENT_400) if e.data == "true" else ft.border.all(3, ft.Colors.RED)
-        e.control.update()
+    def set_current_file(self, file_path, file_info):
+        self.file_label.setText(f"Текущий файл: {os.path.basename(file_path)}")
+        self.process_btn.setEnabled(True)
+        self.info_btn.setEnabled(True)
+        self._cached_info = file_info
+        self.check_vfr_status()
+        self.update_estimated_size(self.crf_slider.value(), self.current_codec())
 
-    def handle_drag_leave(self, e):
-        e.control.border = None
-        e.control.update()
+    def current_codec(self):
+        ext = self.format_combo.currentData()
+        return OUTPUT_EXTENSIONS[ext]["codec"]
 
-    def handle_extension_change(self, e: ft.ControlEvent):
-        self.state.output_extension_key = e.control.value
-        self.update_crf_slider(self.state.output_extension_key)
+    def on_format_changed(self):
+        ext = self.format_combo.currentData()
+        details = OUTPUT_EXTENSIONS.get(ext, OUTPUT_EXTENSIONS[DEFAULT_OUTPUT_EXTENSION_KEY])
+        self.crf_slider.setRange(details["crf_min"], details["crf_max"])
+        self.crf_slider.setValue(details["crf_default"])
+        self.on_crf_changed(details["crf_default"])
+        self.update_estimated_size(self.crf_slider.value(), details["codec"])
+        # Обновляем таблицу при изменении формата
+        self.update_queue_table()
 
-    def handle_crf_change(self, e: ft.ControlEvent):
-        self.state.crf_value = int(e.control.value)
-        self.controls.slider_crf_label.value = f"CRF: {self.state.crf_value}"
-        self.controls.slider_crf_label.update()
+    def on_encoding_changed(self):
+        self.update_estimated_size(self.crf_slider.value(), self.current_codec())
+        # Обновляем таблицу при изменении типа кодирования
+        self.update_queue_table()
 
-    def handle_force_fix_change(self, e: ft.ControlEvent):
-        self.state.force_vfr_fix = e.control.value
-
-    # --- Логика обработки ---
-
-    def _processing_target_func(self):
-        input_file = self.state.input_filepath
-        output_dir = os.path.dirname(input_file)
-        base_name, ext = os.path.splitext(os.path.basename(input_file))
-        temp_file = os.path.join(output_dir, f"{base_name}{TEMP_FIXED_VIDEO_SUFFIX}{ext}")
-        final_file = os.path.join(output_dir, f"{base_name}{COMPRESSED_VIDEO_SUFFIX}.{self.state.output_extension_key}")
-        current_input, success, error_msg = input_file, True, ""
-
-        if self.state.force_vfr_fix or self.state.vfr_fix_recommended:
-            self.page.run_thread(lambda: self.set_ui_processing_state(True, "Починка VFR"))
-            success, error_msg = fix_vfr(
-                input_file, temp_file, DEFAULT_FPS_FIX, DEFAULT_FIX_CRF_H264, DEFAULT_FIX_CRF_VP9, 
-                self.state.output_extension_key, 
-                lambda p: self.page.run_thread(lambda: self.update_progress_ui(p)), 
-                self.state.video_duration_seconds
-            )
-            if success: current_input = temp_file
-
-        if success:
-            self.page.run_thread(lambda: self.set_ui_processing_state(True, "Сжатие"))
-            details = OUTPUT_EXTENSIONS[self.state.output_extension_key]
-            success, error_msg = compress_video(
-                current_input, final_file, details, self.state.crf_value,
-                lambda p: self.page.run_thread(lambda: self.update_progress_ui(p)),
-                self.state.video_duration_seconds
-            )
-
-        if success:
-            self.page.run_thread(lambda: self.show_snackbar(f"Успешно! Сохранено: {final_file}"))
+    def on_crf_changed(self, value):
+        if value == self.crf_slider.minimum():
+            self.crf_label.setText("CRF: только VFR-fix (copy)")
         else:
-            self.page.run_thread(lambda: self.show_snackbar(error_msg, ft.Colors.RED))
+            self.crf_label.setText(f"CRF: {value}")
+        self.update_estimated_size(value, self.current_codec())
+        # Обновляем таблицу при изменении CRF
+        self.update_queue_table()
 
-        if os.path.exists(temp_file): os.remove(temp_file)
-        self.page.run_thread(lambda: self.set_ui_processing_state(False))
-        self.page.run_thread(lambda: self.update_ui_after_file_selection(None))
-
-    def start_processing_thread(self, e=None):
-        if self.state.is_processing: return
-        if not self.state.input_filepath:
-            self.show_snackbar("Сначала выберите видеофайл!", ft.Colors.YELLOW_ACCENT_700)
+    def update_estimated_size(self, crf, codec):
+        if not self.current_file:
+            self.estimated_label.setText("Примерный размер после сжатия: —")
             return
         
-        thread = threading.Thread(target=self._processing_target_func, daemon=True)
-        thread.start()
+        # Используем кэшированную информацию
+        info = self._cached_info if self._cached_info else None
+        
+        if info is None:
+            return
 
-def main(page: ft.Page):
-    """Точка входа для Flet приложения."""
-    controller = AppController(page)
-    controller.initialize()
+        # Используем новые поля video_bitrate и audio_bitrate
+        est = self.processor.estimated_size_mb(
+            video_bitrate=info.get("video_bitrate", 0),
+            audio_bitrate=info.get("audio_bitrate", 128000),
+            duration=info["duration"],
+            crf=crf,
+            codec=codec,
+            needs_vfr_fix=info.get('needs_vfr_fix', False) or self.vfr_checkbox.isChecked(),
+            use_hardware=self.hardware_radio.isChecked()
+        )
+
+        self.estimated_label.setText(f"Примерный размер после сжатия: {est:.1f} МБ")
+
+    def check_vfr_status(self):
+        if self.current_file:
+            needs_fix = self._cached_info.get('needs_vfr_fix', False) if self._cached_info else False
+            if needs_fix:
+                self.vfr_status_label.setText("Статус VFR: Рекомендуется!")
+                self.vfr_status_label.setStyleSheet("color: orange;")
+            else:
+                self.vfr_status_label.setText("Статус VFR: Не требуется")
+                self.vfr_status_label.setStyleSheet("color: green;")
+
+    def show_info(self):
+        if self.current_file and self._cached_info:
+            self.show_info_dialog(self._cached_info)
+
+    def show_info_dialog(self, info):
+        dialog = VideoInfoDialog(info, self)
+        dialog.exec()
+
+    def start_processing(self):
+        if not self.current_file:
+            QMessageBox.warning(self, "Предупреждение", "Сначала выберите файл")
+            return
+        params = {
+            "input_path": self.current_file,
+            "output_format": self.format_combo.currentData(),
+            "crf_value": self.crf_slider.value(),
+            "force_vfr_fix": self.vfr_checkbox.isChecked(),
+            "use_hardware": self.hardware_radio.isChecked()
+        }
+        self.set_ui_enabled(False)
+        self.run_compression_worker(**params)
+
+    def run_compression_worker(self, **kwargs):
+        self.compression_worker = WorkerThread(self.processor, 'compress', **kwargs)
+        self.compression_worker.progress_updated.connect(self.update_progress)
+        self.compression_worker.finished.connect(self.on_finished)
+        self.compression_worker.error_occurred.connect(self.on_error)
+        self.compression_worker.finished.connect(self.on_compression_worker_finished)
+        self.active_workers.append(self.compression_worker)
+        self.compression_worker.start()
+
+    def run_info_worker(self, input_path, callback_slot):
+        worker = WorkerThread(self.processor, 'info', input_path=input_path)
+        worker.info_ready.connect(callback_slot)
+        worker.error_occurred.connect(self.on_error)
+        worker.finished.connect(lambda: self.on_worker_finished(worker))
+        self.active_workers.append(worker)
+        worker.start()
+
+    def on_worker_finished(self, worker):
+        if worker in self.active_workers:
+            self.active_workers.remove(worker)
+        worker.deleteLater()
+
+    def on_compression_worker_finished(self):
+        worker = self.sender()
+        self.on_worker_finished(worker)
+        self.compression_worker = None
+
+    def update_progress(self, value, message):
+        self.progress_bar.setValue(value)
+        self.status_label.setText(message)
+        if value % 5 == 0 or value == 100:
+            self.log_text.append(message)
+
+    def on_finished(self, result):
+        self.log_text.append(f"Готово: {result}")
+        self.process_next_file()
+
+    def on_error(self, error):
+        self.log_text.append(f"ОШИБКА: {error}")
+        self.status_label.setText("Ошибка при обработке!")
+        QMessageBox.critical(self, "Ошибка", f"Произошла ошибка:\n{error}")
+        if self.sender() == self.compression_worker:
+            self.compression_worker = None
+        self.process_next_file()
+
+    def process_next_file(self):
+        # Удаляем обработанный файл из очереди
+        if self.current_file:
+            # Ищем и удаляем текущий файл из очереди
+            self.file_queue = [(path, info) for path, info in self.file_queue if path != self.current_file]
+            self.update_queue_table()
+        
+        self.update_queue_label()
+        if self.file_queue:
+            self.current_file, self.current_info = self.file_queue[0]
+            self.set_current_file(self.current_file, self.current_info)
+            QTimer.singleShot(500, self.start_processing)
+        else:
+            self.current_file = None
+            self.current_info = None
+            self.set_ui_enabled(True)
+            self.file_label.setText("Перетащите файлы сюда или нажмите 'Выбрать'")
+            self.status_label.setText("Готов к работе")
+            self.progress_bar.setValue(0)
+            self.info_btn.setEnabled(False)
+            self.process_btn.setEnabled(False)
+
+    def set_ui_enabled(self, enabled):
+        self.select_file_btn.setEnabled(enabled)
+        self.process_btn.setEnabled(enabled and self.current_file is not None)
+        self.info_btn.setEnabled(enabled and self.current_file is not None)
+        self.format_combo.setEnabled(enabled)
+        self.crf_slider.setEnabled(enabled)
+        self.vfr_checkbox.setEnabled(enabled)
+        self.hardware_radio.setEnabled(enabled)
+        self.software_radio.setEnabled(enabled)
+
+    def closeEvent(self, event):
+        if self.compression_worker and self.compression_worker.isRunning():
+            reply = QMessageBox.question(self, "Выход",
+                                         "Процесс сжатия еще не завершен. Вы уверены, что хотите выйти?",
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self.compression_worker.quit()
+                self.compression_worker.wait(5000)
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            for worker in self.active_workers:
+                worker.quit()
+                worker.wait(1000)
+            event.accept()
+
+
+def main():
+    app = QApplication(sys.argv)
+    if not os.path.exists("ffmpeg.exe") or not os.path.exists("ffprobe.exe"):
+        downloader = FFmpegDownloader()
+        if not downloader.check_and_download():
+            QMessageBox.critical(None, "Критическая ошибка",
+                                 "FFmpeg не найден и не может быть скачан. Приложение будет закрыто.")
+            return -1
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
+
 
 if __name__ == "__main__":
-    if not os.path.exists(FFMPEG_PATH) or not os.path.exists(FFPROBE_PATH):
-        print("ОШИБКА: ffmpeg или ffprobe не найдены. Проверьте пути в config.py.")
-        print(f"Ожидаемый путь ffmpeg: {FFMPEG_PATH}")
-        print(f"Ожидаемый путь ffprobe: {FFPROBE_PATH}")
-        input("Нажмите Enter для выхода...")
-    else:
-        ft.app(target=main)
+    main()
