@@ -52,10 +52,7 @@ class VideoProcessor:
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            startupinfo=startupinfo,
-            encoding='utf-8',
-            errors='replace'
+            startupinfo=startupinfo
         )
         
         # Передаем процесс в WorkerThread для возможности остановки
@@ -64,7 +61,18 @@ class VideoProcessor:
         
         output_log = []
         error_lines = []
-        for line in iter(process.stdout.readline, ''):
+        for line_bytes in iter(process.stdout.readline, b''):
+            try:
+                # Декодируем строку с обработкой ошибок
+                line = line_bytes.decode('utf-8', errors='replace')
+            except UnicodeDecodeError:
+                # Если UTF-8 не сработал, пробуем другие кодировки
+                try:
+                    line = line_bytes.decode('cp1251', errors='replace')
+                except UnicodeDecodeError:
+                    # Если и cp1251 не сработал, используем замену нераспознанных символов
+                    line = line_bytes.decode('ascii', errors='replace')
+            
             output_log.append(line)
             # Сохраняем строки с ошибками для детального анализа
             if any(keyword in line.lower() for keyword in ['error', 'failed', 'invalid', 'cannot', 'unable']):
@@ -129,9 +137,19 @@ class VideoProcessor:
     def get_audio_tracks(self, input_path: str) -> List[Dict]:
         cmd = [self.ffprobe_path, "-v", "quiet", "-print_format", "json", "-show_streams", input_path]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, startupinfo=self._get_platform_specific_startupinfo())
+            # Запускаем процесс без автоматического декодирования вывода
+            result = subprocess.run(cmd, capture_output=True, timeout=30, startupinfo=self._get_platform_specific_startupinfo())
             if result.returncode == 0:
-                data = json.loads(result.stdout)
+                # Декодируем вывод вручную с обработкой ошибок
+                try:
+                    output_text = result.stdout.decode('utf-8', errors='replace')
+                except UnicodeDecodeError:
+                    try:
+                        output_text = result.stdout.decode('cp1251', errors='replace')
+                    except UnicodeDecodeError:
+                        output_text = result.stdout.decode('ascii', errors='replace')
+                
+                data = json.loads(output_text)
                 return [
                     {
                         "index": s.get("index", i),
@@ -237,12 +255,31 @@ class VideoProcessor:
         print(f"[DEBUG] Getting video info for: {input_path}")
         cmd = [self.ffprobe_path, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", input_path]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, startupinfo=self._get_platform_specific_startupinfo())
+            # Запускаем процесс без автоматического декодирования вывода
+            result = subprocess.run(cmd, capture_output=True, timeout=30, startupinfo=self._get_platform_specific_startupinfo())
             if result.returncode != 0: 
-                print(f"[ERROR] FFprobe failed with code {result.returncode}: {result.stderr}")
-                return {"error": f"Ошибка ffprobe: {result.stderr}"}
+                # Декодируем stderr вручную с обработкой ошибок
+                try:
+                    stderr_text = result.stderr.decode('utf-8', errors='replace')
+                except UnicodeDecodeError:
+                    try:
+                        stderr_text = result.stderr.decode('cp1251', errors='replace')
+                    except UnicodeDecodeError:
+                        stderr_text = result.stderr.decode('ascii', errors='replace')
+                
+                print(f"[ERROR] FFprobe failed with code {result.returncode}: {stderr_text}")
+                return {"error": f"Ошибка ffprobe: {stderr_text}"}
             
-            data = json.loads(result.stdout)
+            # Декодируем stdout вручную с обработкой ошибок
+            try:
+                output_text = result.stdout.decode('utf-8', errors='replace')
+            except UnicodeDecodeError:
+                try:
+                    output_text = result.stdout.decode('cp1251', errors='replace')
+                except UnicodeDecodeError:
+                    output_text = result.stdout.decode('ascii', errors='replace')
+            
+            data = json.loads(output_text)
             video_stream = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
             if not video_stream: 
                 print(f"[ERROR] No video stream found in file")
@@ -335,7 +372,7 @@ class VideoProcessor:
             return {"error": f"Исключение при получении информации: {str(e)}"}
 
     def compress_video(self, input_path: str, output_format: str, codec: str, crf_value: int,
-                    force_vfr_fix: bool, use_hardware: bool = False, 
+                    preset_value: str, force_vfr_fix: bool, use_hardware: bool = False, 
                     progress_callback: Optional[Callable] = None,
                     process_setter: Optional[Callable] = None) -> str:
         print(f"[DEBUG] Starting compression:")
@@ -343,6 +380,7 @@ class VideoProcessor:
         print(f"[DEBUG]   Output format: {output_format}")
         print(f"[DEBUG]   Codec: {codec}")
         print(f"[DEBUG]   CRF: {crf_value}")
+        print(f"[DEBUG]   Preset: {preset_value}")
         print(f"[DEBUG]   Force VFR fix: {force_vfr_fix}")
         print(f"[DEBUG]   Hardware encoding: {use_hardware}")
         
@@ -377,7 +415,7 @@ class VideoProcessor:
                 print(f"[DEBUG] VFR fix is needed")
                 def vfr_progress(p, m): 
                     progress_callback(10 + int(p * 0.4), m) if progress_callback else None
-                success, msg = self.fix_vfr_target_crf(current_input, str(output_file), output_format, codec, crf_value, vfr_progress, duration, use_hardware, video_info, process_setter)
+                success, msg = self.fix_vfr_target_crf(current_input, str(output_file), output_format, codec, crf_value, preset_value, vfr_progress, duration, use_hardware, video_info, process_setter)
                 if not success: 
                     print(f"[ERROR] VFR fix failed: {msg}")
                     raise Exception(f"Ошибка VFR-fix: {msg}")
@@ -386,17 +424,17 @@ class VideoProcessor:
                 print(f"[DEBUG] No VFR fix needed, proceeding with compression")
                 def compress_progress(p, m): 
                     progress_callback(50 + int(p * 0.45), m) if progress_callback else None
-                success, msg = self.compress_video_core(current_input, str(output_file), output_format, codec, crf_value, compress_progress, duration, video_info, use_hardware, process_setter)
+                success, msg = self.compress_video_core(current_input, str(output_file), output_format, codec, crf_value, preset_value, compress_progress, duration, video_info, use_hardware, process_setter)
                 if not success: 
                     print(f"[ERROR] Compression failed: {msg}")
                     # Пробуем альтернативный метод без субтитров
                     print(f"[DEBUG] Trying alternative method without subtitles...")
-                    success, msg = self.compress_video_core_no_subtitles(current_input, str(output_file), output_format, codec, crf_value, compress_progress, duration, video_info, use_hardware, process_setter)
+                    success, msg = self.compress_video_core_no_subtitles(current_input, str(output_file), output_format, codec, crf_value, preset_value, compress_progress, duration, video_info, use_hardware, process_setter)
                     if not success:
                         print(f"[ERROR] Alternative method failed: {msg}")
                         # Пробуем последний метод с полным маппингом, но без данных
                         print(f"[DEBUG] Trying last method with full mapping but no data...")
-                        success, msg = self.compress_video_core_full_map(current_input, str(output_file), output_format, codec, crf_value, compress_progress, duration, video_info, use_hardware, process_setter)
+                        success, msg = self.compress_video_core_full_map(current_input, str(output_file), output_format, codec, crf_value, preset_value, compress_progress, duration, video_info, use_hardware, process_setter)
                         if not success:
                             print(f"[ERROR] All methods failed: {msg}")
                             raise Exception(f"Ошибка сжатия: {msg}")
@@ -408,7 +446,7 @@ class VideoProcessor:
             raise e
 
     def fix_vfr_target_crf(self, input_path: str, output_path: str,
-                        output_format: str, codec: str, crf_value: int,
+                        output_format: str, codec: str, crf_value: int, preset_value: str,
                         progress_callback: Optional[Callable], duration_seconds: float, 
                         use_hardware: bool = False, video_info: dict = None,
                         process_setter: Optional[Callable] = None) -> tuple[bool, str]:
@@ -418,6 +456,7 @@ class VideoProcessor:
         print(f"[DEBUG]   Format: {output_format}")
         print(f"[DEBUG]   Codec: {codec}")
         print(f"[DEBUG]   CRF: {crf_value}")
+        print(f"[DEBUG]   Preset: {preset_value}")
         
         gpu_info = self.get_gpu_info()
         has_nvenc = "NVIDIA NVENC" in gpu_info
@@ -455,6 +494,7 @@ class VideoProcessor:
                 print(f"[DEBUG] Using VP9 hardware encoder")
             else:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
+                cmd.extend(["-deadline", "good", "-cpu-used", "2"])
                 print(f"[DEBUG] Using VP9 software encoder")
             cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
             print(f"[DEBUG] Copying audio streams as-is")
@@ -463,8 +503,8 @@ class VideoProcessor:
                 cmd.extend(["-c:v", "hevc_nvenc", "-crf", str(crf_value), "-preset", "p6", "-tune", "film"])
                 print(f"[DEBUG] Using HEVC hardware encoder")
             else:
-                cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", "medium"])
-                print(f"[DEBUG] Using HEVC software encoder")
+                cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
+                print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
             cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
             print(f"[DEBUG] Copying audio streams as-is")
         else:  # libx264
@@ -472,8 +512,8 @@ class VideoProcessor:
                 cmd.extend(["-c:v", "h264_nvenc", "-cq", str(crf_value), "-preset", "p6", "-tune", "film"])
                 print(f"[DEBUG] Using H.264 hardware encoder")
             else:
-                cmd.extend(["-c:v", "libx264", "-crf", str(crf_value), "-preset", "slow"])
-                print(f"[DEBUG] Using H.264 software encoder")
+                cmd.extend(["-c:v", "libx264", "-crf", str(crf_value), "-preset", preset_value])
+                print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
             cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
             print(f"[DEBUG] Copying audio streams as-is")
         
@@ -500,7 +540,7 @@ class VideoProcessor:
         return self._run_command_with_progress(cmd, progress_callback, duration_seconds, "VFR-fix+сжатие", process_setter)
 
     def compress_video_core(self, input_path: str, output_path: str, output_format: str, codec: str, crf_value: int,
-                        progress_callback: Optional[Callable], duration_seconds: float, 
+                        preset_value: str, progress_callback: Optional[Callable], duration_seconds: float, 
                         video_info: dict = None, use_hardware: bool = False,
                         process_setter: Optional[Callable] = None) -> tuple[bool, str]:
         print(f"[DEBUG] Starting direct compression:")
@@ -509,6 +549,7 @@ class VideoProcessor:
         print(f"[DEBUG]   Format: {output_format}")
         print(f"[DEBUG]   Codec: {codec}")
         print(f"[DEBUG]   CRF: {crf_value}")
+        print(f"[DEBUG]   Preset: {preset_value}")
         
         # Получаем информацию о битрейте, если она не была передана
         if video_info is None:
@@ -540,10 +581,10 @@ class VideoProcessor:
             vf_filters.append("format=yuv420p")
             print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
         
-        # Для H.264 добавляем фильтр выравнивания размеров
+        # Для H.264 добавляем фильтр выравнивания размеров, используя pad как в bat-файле
         if codec == "libx264" and not use_hardware:
             vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
-            print(f"[DEBUG] Adding padding filter for H.264")
+            print(f"[DEBUG] Adding pad filter for H.264")
         
         if vf_filters:
             cmd.extend(["-vf", ",".join(vf_filters)])
@@ -558,17 +599,19 @@ class VideoProcessor:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
                 print(f"[DEBUG] Using VP9 software encoder")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
-            print(f"[DEBUG] Copying audio streams as-is")
+            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
+            cmd.extend(["-c:a", "aac", "-b:a", "320k"])
+            print(f"[DEBUG] Converting audio to AAC 320k")
         elif codec == "libx265":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "hevc_nvenc", "-crf", str(crf_value), "-preset", "p6", "-tune", "film"])
                 print(f"[DEBUG] Using HEVC hardware encoder")
             else:
-                cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", "medium"])
-                print(f"[DEBUG] Using HEVC software encoder")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
-            print(f"[DEBUG] Copying audio streams as-is")
+                cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
+                print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
+            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
+            cmd.extend(["-c:a", "aac", "-b:a", "320k"])
+            print(f"[DEBUG] Converting audio to AAC 320k")
         else:  # libx264
             if use_hardware and has_nvenc:
                 cmd.extend([
@@ -583,16 +626,16 @@ class VideoProcessor:
                 ])
                 print(f"[DEBUG] Using H.264 hardware encoder")
             else:
+                # Используем выбранный пресет
                 cmd.extend([
                     "-c:v", "libx264", 
                     "-crf", str(crf_value), 
-                    "-preset", "slow",
-                    "-pix_fmt", "yuv420p", 
-                    "-tune", "film"
+                    "-preset", preset_value
                 ])
-                print(f"[DEBUG] Using H.264 software encoder")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
-            print(f"[DEBUG] Copying audio streams as-is")
+                print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
+            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
+            cmd.extend(["-c:a", "aac", "-b:a", "320k"])
+            print(f"[DEBUG] Converting audio to AAC 320k")
             
         # Для MP4 добавляем обработку субтитров
         if output_format == "mp4":
@@ -617,7 +660,7 @@ class VideoProcessor:
         return self._run_command_with_progress(cmd, progress_callback, duration_seconds, "Сжатие", process_setter)
 
     def compress_video_core_no_subtitles(self, input_path: str, output_path: str, output_format: str, codec: str, crf_value: int,
-                        progress_callback: Optional[Callable], duration_seconds: float, 
+                        preset_value: str, progress_callback: Optional[Callable], duration_seconds: float, 
                         video_info: dict = None, use_hardware: bool = False,
                         process_setter: Optional[Callable] = None) -> tuple[bool, str]:
         print(f"[DEBUG] Starting compression without subtitles:")
@@ -626,6 +669,7 @@ class VideoProcessor:
         print(f"[DEBUG]   Format: {output_format}")
         print(f"[DEBUG]   Codec: {codec}")
         print(f"[DEBUG]   CRF: {crf_value}")
+        print(f"[DEBUG]   Preset: {preset_value}")
         
         # Получаем информацию о битрейте, если она не была передана
         if video_info is None:
@@ -657,10 +701,10 @@ class VideoProcessor:
             vf_filters.append("format=yuv420p")
             print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
         
-        # Для H.264 добавляем фильтр выравнивания размеров
+        # Для H.264 добавляем фильтр выравнивания размеров, используя pad как в bat-файле
         if codec == "libx264" and not use_hardware:
             vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
-            print(f"[DEBUG] Adding padding filter for H.264")
+            print(f"[DEBUG] Adding pad filter for H.264")
         
         if vf_filters:
             cmd.extend(["-vf", ",".join(vf_filters)])
@@ -675,17 +719,19 @@ class VideoProcessor:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
                 print(f"[DEBUG] Using VP9 software encoder")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
-            print(f"[DEBUG] Copying audio streams as-is")
+            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
+            cmd.extend(["-c:a", "aac", "-b:a", "320k"])
+            print(f"[DEBUG] Converting audio to AAC 320k")
         elif codec == "libx265":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "hevc_nvenc", "-crf", str(crf_value), "-preset", "p6", "-tune", "film"])
                 print(f"[DEBUG] Using HEVC hardware encoder")
             else:
-                cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", "medium"])
-                print(f"[DEBUG] Using HEVC software encoder")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
-            print(f"[DEBUG] Copying audio streams as-is")
+                cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
+                print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
+            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
+            cmd.extend(["-c:a", "aac", "-b:a", "320k"])
+            print(f"[DEBUG] Converting audio to AAC 320k")
         else:  # libx264
             if use_hardware and has_nvenc:
                 cmd.extend([
@@ -700,16 +746,16 @@ class VideoProcessor:
                 ])
                 print(f"[DEBUG] Using H.264 hardware encoder")
             else:
+                # Используем выбранный пресет
                 cmd.extend([
                     "-c:v", "libx264", 
                     "-crf", str(crf_value), 
-                    "-preset", "slow",
-                    "-pix_fmt", "yuv420p", 
-                    "-tune", "film"
+                    "-preset", preset_value
                 ])
-                print(f"[DEBUG] Using H.264 software encoder")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
-            print(f"[DEBUG] Copying audio streams as-is")
+                print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
+            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
+            cmd.extend(["-c:a", "aac", "-b:a", "320k"])
+            print(f"[DEBUG] Converting audio to AAC 320k")
             
         # Добавляем map только для видеопотоков и аудиопотоков, исключая субтитры и обложку
         cmd.extend(["-map", "0:V", "-map", "0:a"])
@@ -726,7 +772,7 @@ class VideoProcessor:
         return self._run_command_with_progress(cmd, progress_callback, duration_seconds, "Сжатие без субтитров", process_setter)
 
     def compress_video_core_full_map(self, input_path: str, output_path: str, output_format: str, codec: str, crf_value: int,
-                        progress_callback: Optional[Callable], duration_seconds: float, 
+                        preset_value: str, progress_callback: Optional[Callable], duration_seconds: float, 
                         video_info: dict = None, use_hardware: bool = False,
                         process_setter: Optional[Callable] = None) -> tuple[bool, str]:
         print(f"[DEBUG] Starting compression with full mapping but no data:")
@@ -735,6 +781,7 @@ class VideoProcessor:
         print(f"[DEBUG]   Format: {output_format}")
         print(f"[DEBUG]   Codec: {codec}")
         print(f"[DEBUG]   CRF: {crf_value}")
+        print(f"[DEBUG]   Preset: {preset_value}")
         
         # Получаем информацию о битрейте, если она не была передана
         if video_info is None:
@@ -766,10 +813,10 @@ class VideoProcessor:
             vf_filters.append("format=yuv420p")
             print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
         
-        # Для H.264 добавляем фильтр выравнивания размеров
+        # Для H.264 добавляем фильтр выравнивания размеров, используя pad как в bat-файле
         if codec == "libx264" and not use_hardware:
             vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
-            print(f"[DEBUG] Adding padding filter for H.264")
+            print(f"[DEBUG] Adding pad filter for H.264")
         
         if vf_filters:
             cmd.extend(["-vf", ",".join(vf_filters)])
@@ -784,17 +831,19 @@ class VideoProcessor:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
                 print(f"[DEBUG] Using VP9 software encoder")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
-            print(f"[DEBUG] Copying audio streams as-is")
+            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
+            cmd.extend(["-c:a", "aac", "-b:a", "320k"])
+            print(f"[DEBUG] Converting audio to AAC 320k")
         elif codec == "libx265":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "hevc_nvenc", "-crf", str(crf_value), "-preset", "p6", "-tune", "film"])
                 print(f"[DEBUG] Using HEVC hardware encoder")
             else:
-                cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", "medium"])
-                print(f"[DEBUG] Using HEVC software encoder")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
-            print(f"[DEBUG] Copying audio streams as-is")
+                cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
+                print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
+            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
+            cmd.extend(["-c:a", "aac", "-b:a", "320k"])
+            print(f"[DEBUG] Converting audio to AAC 320k")
         else:  # libx264
             if use_hardware and has_nvenc:
                 cmd.extend([
@@ -809,16 +858,16 @@ class VideoProcessor:
                 ])
                 print(f"[DEBUG] Using H.264 hardware encoder")
             else:
+                # Используем выбранный пресет
                 cmd.extend([
                     "-c:v", "libx264", 
                     "-crf", str(crf_value), 
-                    "-preset", "slow",
-                    "-pix_fmt", "yuv420p", 
-                    "-tune", "film"
+                    "-preset", preset_value
                 ])
-                print(f"[DEBUG] Using H.264 software encoder")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
-            print(f"[DEBUG] Copying audio streams as-is")
+                print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
+            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
+            cmd.extend(["-c:a", "aac", "-b:a", "320k"])
+            print(f"[DEBUG] Converting audio to AAC 320k")
             
         # Добавляем map для всех потоков, но исключаем данные (обложки и т.д.)
         cmd.extend(["-map", "0", "-map", "-0:d"])

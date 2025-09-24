@@ -29,6 +29,14 @@ DEFAULT_FPS_FIX      = 25.0
 # Используем программное кодирование по умолчанию (libx264)
 DEFAULT_USE_HARDWARE_ENCODING = False
 
+# Доступные пресеты для кодирования
+H264_PRESETS = ["veryslow", "slower", "slow", "medium", "fast", "faster", "veryfast", "superfast", "ultrafast"]
+H265_PRESETS = ["veryslow", "slower", "slow", "medium", "fast", "faster", "veryfast", "superfast", "ultrafast"]
+VP9_PRESETS = ["veryslow", "slower", "slow", "medium", "fast", "faster", "veryfast", "superfast", "ultrafast"]
+DEFAULT_H264_PRESET = "veryslow"
+DEFAULT_H265_PRESET = "slow"
+DEFAULT_VP9_PRESET = "slow"
+
 # коэффициенты условного сжатия для расчёта примерного размера
 H264_CRF_FACTOR = {
     18: 1.0, 19: 0.95, 20: 0.90, 21: 0.85, 22: 0.80, 23: 0.75,
@@ -57,6 +65,8 @@ CODECS = {
         "crf_min": DEFAULT_MIN_CRF_H264,
         "crf_max": DEFAULT_MAX_CRF_H264,
         "crf_default": DEFAULT_CRF_H264,
+        "presets": H264_PRESETS,
+        "preset_default": DEFAULT_H264_PRESET,
         "factor": H264_CRF_FACTOR
     },
     "libx265": {
@@ -64,6 +74,8 @@ CODECS = {
         "crf_min": DEFAULT_MIN_CRF_H265,
         "crf_max": DEFAULT_MAX_CRF_H265,
         "crf_default": DEFAULT_CRF_H265,
+        "presets": H265_PRESETS,
+        "preset_default": DEFAULT_H265_PRESET,
         "factor": H265_CRF_FACTOR
     },
     "libvpx-vp9": {
@@ -71,6 +83,8 @@ CODECS = {
         "crf_min": DEFAULT_MIN_CRF_VP9,
         "crf_max": DEFAULT_MAX_CRF_VP9,
         "crf_default": DEFAULT_CRF_VP9,
+        "presets": VP9_PRESETS,
+        "preset_default": DEFAULT_VP9_PRESET,
         "factor": VP9_CRF_FACTOR
     }
 }

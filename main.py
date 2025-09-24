@@ -245,6 +245,15 @@ class MainWindow(QMainWindow):
         encoding_layout.addWidget(self.software_radio)
         encoding_layout.addStretch()
         
+        # Выбор пресета
+        preset_layout = QHBoxLayout()
+        preset_layout.addWidget(QLabel("Пресет:"))
+        self.preset_combo = QComboBox()
+        self.update_preset_options()
+        self.preset_combo.currentTextChanged.connect(self.on_preset_changed)
+        preset_layout.addWidget(self.preset_combo)
+        preset_layout.addStretch()
+        
         # Настройка CRF
         crf_layout = QHBoxLayout()
         self.crf_label = QLabel("CRF: ")
@@ -264,6 +273,7 @@ class MainWindow(QMainWindow):
         settings_layout.addLayout(format_layout)
         settings_layout.addLayout(codec_layout)
         settings_layout.addLayout(encoding_layout)
+        settings_layout.addLayout(preset_layout)
         settings_layout.addLayout(crf_layout)
         settings_layout.addLayout(vfr_layout)
         settings_group.setLayout(settings_layout)
@@ -402,6 +412,9 @@ class MainWindow(QMainWindow):
     def current_codec(self):
         return self.codec_combo.currentData()
 
+    def current_preset(self):
+        return self.preset_combo.currentData()
+
     def update_codec_options(self):
         """Обновляет список доступных кодеков на основе выбранного формата."""
         self.codec_combo.clear()
@@ -418,9 +431,27 @@ class MainWindow(QMainWindow):
         if index >= 0:
             self.codec_combo.setCurrentIndex(index)
 
+    def update_preset_options(self):
+        """Обновляет список доступных пресетов на основе выбранного кодека."""
+        self.preset_combo.clear()
+        codec_key = self.codec_combo.currentData()
+        presets = CODECS[codec_key]["presets"]
+        default_preset = CODECS[codec_key]["preset_default"]
+        
+        for preset in presets:
+            self.preset_combo.addItem(preset, preset)
+        
+        # Устанавливаем пресет по умолчанию для текущего кодека
+        index = self.preset_combo.findData(default_preset)
+        if index >= 0:
+            self.preset_combo.setCurrentIndex(index)
+
     def on_format_changed(self):
         # Обновляем список доступных кодеков
         self.update_codec_options()
+        
+        # Обновляем список пресетов для нового кодека
+        self.update_preset_options()
         
         # Обновляем настройки CRF
         codec_key = self.codec_combo.currentData()
@@ -433,6 +464,9 @@ class MainWindow(QMainWindow):
         self.update_queue_table()
 
     def on_codec_changed(self):
+        # Обновляем список пресетов для нового кодека
+        self.update_preset_options()
+        
         # Обновляем настройки CRF при изменении кодека
         codec_key = self.codec_combo.currentData()
         codec_details = CODECS.get(codec_key, CODECS[DEFAULT_CODEC_KEY])
@@ -441,6 +475,10 @@ class MainWindow(QMainWindow):
         self.on_crf_changed(codec_details["crf_default"])
         self.update_estimated_size(self.crf_slider.value(), codec_key)
         # Обновляем таблицу при изменении кодека
+        self.update_queue_table()
+
+    def on_preset_changed(self):
+        # Обновляем таблицу при изменении пресета
         self.update_queue_table()
 
     def on_encoding_changed(self):
@@ -513,6 +551,7 @@ class MainWindow(QMainWindow):
             "output_format": self.format_combo.currentData(),
             "codec": self.codec_combo.currentData(),
             "crf_value": self.crf_slider.value(),
+            "preset_value": self.preset_combo.currentData(),
             "force_vfr_fix": self.vfr_checkbox.isChecked(),
             "use_hardware": self.hardware_radio.isChecked()
         }
@@ -640,6 +679,7 @@ class MainWindow(QMainWindow):
         self.info_btn.setEnabled(enabled and self.current_file is not None)
         self.format_combo.setEnabled(enabled)
         self.codec_combo.setEnabled(enabled)
+        self.preset_combo.setEnabled(enabled)
         self.crf_slider.setEnabled(enabled)
         self.vfr_checkbox.setEnabled(enabled)
         self.hardware_radio.setEnabled(enabled)
