@@ -2,13 +2,158 @@
 Модуль для оценки размера видео после сжатия
 """
 from config import CODECS
+import json
+import os
 
 
 class VideoSizeEstimator:
     """Класс для оценки размера видео после сжатия"""
     
     def __init__(self):
-        pass
+        # Базовый эталон - Intel i7-10700K (средний игровой процессор)
+        self.benchmark_cpu_score = 1000  # 1000 баллов для базового CPU
+        self.cpu_score = self._detect_cpu_performance()
+        print(f"[DEBUG] Detected CPU performance score: {self.cpu_score}")
+    
+    def _detect_cpu_performance(self) -> int:
+        """
+        Определяет примерную производительность CPU на основе информации о системе
+        Возвращает оценку производительности (1000 = средний игровой CPU)
+        """
+        try:
+            # Пытаемся получить информацию о CPU
+            if os.name == 'nt':  # Windows
+                import platform
+                import subprocess
+                
+                # Получаем информацию о процессоре через wmic
+                result = subprocess.run(
+                    ['wmic', 'cpu', 'get', 'name,NumberOfCores,MaxClockSpeed', '/format:list'],
+                    capture_output=True, text=True, timeout=5
+                )
+                
+                if result.returncode == 0:
+                    cpu_info = result.stdout
+                    # Парсим информацию
+                    score = 0
+                    
+                    # Определяем модель процессора
+                    if 'Intel' in cpu_info:
+                        if 'i9' in cpu_info or 'Xeon' in cpu_info:
+                            score = 1500  # Высокопроизводительный
+                        elif 'i7' in cpu_info:
+                            if '10900' in cpu_info or '11700' in cpu_info or '12700' in cpu_info or '13700' in cpu_info:
+                                score = 1200  # Современный i7
+                            elif '10700' in cpu_info or '9700' in cpu_info or '8700' in cpu_info:
+                                score = 1000  # Средний i7
+                            else:
+                                score = 800  # Старый i7
+                        elif 'i5' in cpu_info:
+                            if '12600' in cpu_info or '13600' in cpu_info:
+                                score = 900  # Современный i5
+                            elif '10600' in cpu_info or '11400' in cpu_info or '12400' in cpu_info:
+                                score = 700  # Средний i5
+                            else:
+                                score = 600  # Старый i5
+                        elif 'i3' in cpu_info:
+                            score = 400  # i3
+                        else:
+                            score = 500  # Другой Intel
+                    
+                    elif 'AMD' in cpu_info:
+                        if 'Ryzen 9' in cpu_info:
+                            score = 1400  # Высокопроизводительный Ryzen
+                        elif 'Ryzen 7' in cpu_info:
+                            if '5800' in cpu_info or '7700' in cpu_info or '7950' in cpu_info:
+                                score = 1200  # Современный Ryzen 7
+                            elif '5700' in cpu_info or '5600' in cpu_info:
+                                score = 1000  # Средний Ryzen 7
+                            else:
+                                score = 800  # Старый Ryzen 7
+                        elif 'Ryzen 5' in cpu_info:
+                            if '7600' in cpu_info or '7500' in cpu_info:
+                                score = 900  # Современный Ryzen 5
+                            elif '5600' in cpu_info or '5500' in cpu_info:
+                                score = 700  # Средний Ryzen 5
+                            else:
+                                score = 600  # Старый Ryzen 5
+                        elif 'Ryzen 3' in cpu_info:
+                            score = 500  # Ryzen 3
+                        else:
+                            score = 600  # Другой AMD
+                    
+                    # Корректировка на количество ядер
+                    if 'NumberOfCores' in cpu_info:
+                        try:
+                            lines = cpu_info.split('\n')
+                            for line in lines:
+                                if 'NumberOfCores' in line:
+                                    cores = int(line.split('=')[1].strip())
+                                    if cores >= 16:
+                                        score = int(score * 1.3)  # Многоядерные CPU быстрее
+                                    elif cores >= 12:
+                                        score = int(score * 1.2)
+                                    elif cores >= 8:
+                                        score = int(score * 1.1)
+                                    elif cores <= 4:
+                                        score = int(score * 0.8)  # Малоядерные медленнее
+                                    break
+                        except:
+                            pass
+                    
+                    # Корректировка на частоту
+                    if 'MaxClockSpeed' in cpu_info:
+                        try:
+                            lines = cpu_info.split('\n')
+                            for line in lines:
+                                if 'MaxClockSpeed' in line:
+                                    mhz = int(line.split('=')[1].strip())
+                                    ghz = mhz / 1000
+                                    if ghz >= 5.0:
+                                        score = int(score * 1.2)  # Высокая частота
+                                    elif ghz >= 4.0:
+                                        score = int(score * 1.1)
+                                    elif ghz <= 2.5:
+                                        score = int(score * 0.9)  # Низкая частота
+                                    break
+                        except:
+                            pass
+                    
+                    print(f"[DEBUG] CPU detection result: score={score}")
+                    return score
+            
+            # Для Linux/Mac - используем platform.processor
+            import platform
+            cpu_name = platform.processor()
+            
+            if 'Intel' in cpu_name:
+                if 'i9' in cpu_name or 'Xeon' in cpu_name:
+                    return 1500
+                elif 'i7' in cpu_name:
+                    return 1000
+                elif 'i5' in cpu_name:
+                    return 700
+                elif 'i3' in cpu_name:
+                    return 400
+                else:
+                    return 600
+            elif 'AMD' in cpu_name:
+                if 'Ryzen 9' in cpu_name:
+                    return 1400
+                elif 'Ryzen 7' in cpu_name:
+                    return 1000
+                elif 'Ryzen 5' in cpu_name:
+                    return 700
+                elif 'Ryzen 3' in cpu_name:
+                    return 500
+                else:
+                    return 600
+            else:
+                return 800  # По умолчанию для неизвестных CPU
+                
+        except Exception as e:
+            print(f"[DEBUG] CPU detection failed: {e}")
+            return 800  # Значение по умолчанию при ошибке
     
     def get_min_effective_bitrate(self, width: int, height: int, crf: int, codec: str) -> int:
         """
@@ -46,6 +191,105 @@ class VideoSizeEstimator:
         print(f"[DEBUG] _get_min_effective_bitrate: calculated min_bitrate_kbps={min_bitrate_kbps:.2f}, min_bitrate_bps={min_bitrate_bps}")
         
         return min_bitrate_bps
+    
+    def estimate_compression_time(self, duration: float, width: int, height: int, preset: str, 
+                                codec: str = "libx264", use_hardware: bool = False) -> float:
+        """
+        Оценивает время сжатия в секундах с учетом производительности CPU.
+        
+        Args:
+            duration: Длительность видео в секундах
+            width: Ширина видео
+            height: Высота видео
+            preset: Пресет сжатия
+            codec: Кодек
+            use_hardware: Использовать ли аппаратное ускорение
+            
+        Returns:
+            Предполагаемое время сжатия в секундах
+        """
+        # Базовые коэффициенты времени для разных пресетов (для эталонного CPU)
+        # Обновлено на основе реальных данных (Intel i7-10700K)
+        preset_time_factors = {
+            "ultrafast": 0.02,   # 50 минут видео = 1 минута кодирования
+            "veryfast": 0.04,     # 25 минут видео = 1 минута кодирования
+            "faster": 0.06,       # 17 минут видео = 1 минута кодирования
+            "fast": 0.1,          # 10 минут видео = 1 минута кодирования
+            "medium": 0.15,       # 7 минут видео = 1 минута кодирования
+            "slow": 0.2,          # 5 минут видео = 1 минута кодирования
+            "slower": 0.25,        # 4 минуты видео = 1 минута кодирования
+            "veryslow": 0.35       # 3 минуты видео = 1 минута кодирования
+        }
+        
+        # Получаем базовый коэффициент для пресета
+        base_factor = preset_time_factors.get(preset, 0.15)
+        
+        # Корректировка в зависимости от разрешения
+        if width >= 3840:  # 4K
+            resolution_factor = 1.5  # 4K в 1.5 раза медленнее
+        elif width >= 1920:  # 1080p
+            resolution_factor = 1.0  # Базовый
+        elif width >= 1280:  # 720p
+            resolution_factor = 0.7  # 720p быстрее
+        else:  # <720p
+            resolution_factor = 0.5
+        
+        # Корректировка в зависимости от кодека
+        if codec == "libx265":
+            codec_factor = 1.2  # H.265 немного медленнее
+        elif codec == "libvpx-vp9":
+            codec_factor = 1.3  # VP9 медленнее
+        else:  # libx264
+            codec_factor = 1.0
+        
+        # Аппаратное ускорение значительно ускоряет кодирование
+        if use_hardware:
+            hardware_factor = 0.05  # В 20 раз быстрее
+        else:
+            hardware_factor = 1.0
+        
+        # Корректировка на производительность CPU
+        # Чем выше оценка CPU, тем быстрее кодирование
+        cpu_factor = self.benchmark_cpu_score / self.cpu_score
+        
+        # Дополнительная корректировка для очень длинных видео
+        if duration > 3600:  # > 1 час
+            duration_factor = 0.9  # На 10% быстрее
+        elif duration > 1800:  # > 30 минут
+            duration_factor = 0.95  # На 5% быстрее
+        else:
+            duration_factor = 1.0
+        
+        # Итоговый коэффициент
+        total_factor = base_factor * resolution_factor * codec_factor * hardware_factor * cpu_factor * duration_factor
+        
+        # Расчет времени
+        estimated_time = duration * total_factor
+        
+        print(f"[DEBUG] estimate_compression_time: duration={duration:.1f}s, preset={preset}")
+        print(f"[DEBUG] estimate_compression_time: base_factor={base_factor}, resolution_factor={resolution_factor}")
+        print(f"[DEBUG] estimate_compression_time: codec_factor={codec_factor}, hardware_factor={hardware_factor}")
+        print(f"[DEBUG] estimate_compression_time: cpu_factor={cpu_factor:.2f} (CPU score: {self.cpu_score}/{self.benchmark_cpu_score})")
+        print(f"[DEBUG] estimate_compression_time: duration_factor={duration_factor}")
+        print(f"[DEBUG] estimate_compression_time: total_factor={total_factor:.2f}, estimated_time={estimated_time:.1f}s")
+        
+        return estimated_time
+    
+    def format_duration(self, seconds: float) -> str:
+        """
+        Форматирует длительность в читаемый вид (ЧЧ:ММ:СС)
+        """
+        if seconds < 60:
+            return f"{int(seconds)}с"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{minutes}м {secs}с"
+        else:
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            return f"{hours}ч {minutes}м {secs}с"
     
     def calculate_bitrate_efficiency(self, video_bitrate: int, duration: float) -> float:
         """

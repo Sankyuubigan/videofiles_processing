@@ -40,7 +40,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Video Compressor")
-        self.setGeometry(100, 100, 1000, 700)
+        self.setGeometry(100, 100, 1200, 700)  # Расширил для нового столбца
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
@@ -54,13 +54,18 @@ class MainWindow(QMainWindow):
         
         # Создаем таблицу для очереди файлов
         self.queue_table = QTableWidget()
-        self.queue_table.setColumnCount(5) # Увеличено с 4 до 5
-        self.queue_table.setHorizontalHeaderLabels(["Имя файла", "Размер", "Статус VFR", "Сложность", "Примерный размер после сжатия"])
+        self.queue_table.setColumnCount(7) # Увеличено до 7 столбцов
+        self.queue_table.setHorizontalHeaderLabels([
+            "Имя файла", "Размер", "Длительность", "Статус VFR", 
+            "Сложность", "Примерный размер", "Время сжатия"
+        ])
         self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.queue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.queue_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.queue_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.queue_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.queue_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.queue_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.queue_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.queue_table.setAlternatingRowColors(True)
@@ -295,6 +300,12 @@ class MainWindow(QMainWindow):
             size_item = QTableWidgetItem(f"{size_mb:.1f} МБ")
             self.queue_table.setItem(row, 1, size_item)
             
+            # Длительность
+            duration = info.get("duration", 0)
+            duration_formatted = self.processor.size_estimator.format_duration(duration)
+            duration_item = QTableWidgetItem(duration_formatted)
+            self.queue_table.setItem(row, 2, duration_item)
+            
             needs_vfr = info.get("needs_vfr_fix", False)
             vfr_text = "Требуется" if needs_vfr else "Не требуется"
             vfr_item = QTableWidgetItem(vfr_text)
@@ -302,12 +313,12 @@ class MainWindow(QMainWindow):
                 vfr_item.setForeground(Qt.GlobalColor.red)
             else:
                 vfr_item.setForeground(Qt.GlobalColor.darkGreen)
-            self.queue_table.setItem(row, 2, vfr_item)
+            self.queue_table.setItem(row, 3, vfr_item)
             
-            # Добавляем столбец со сложностью
+            # Сложность
             complexity_desc = info.get('complexity_desc', 'Не определено')
             complexity_item = QTableWidgetItem(complexity_desc)
-            self.queue_table.setItem(row, 3, complexity_item)
+            self.queue_table.setItem(row, 4, complexity_item)
             
             complexity_score = info.get('complexity_score', 5)
             est_size = self.processor.estimated_size_mb(
@@ -324,7 +335,20 @@ class MainWindow(QMainWindow):
                 height=info.get("height", 1080)
             )
             est_item = QTableWidgetItem(f"{est_size:.1f} МБ")
-            self.queue_table.setItem(row, 4, est_item)
+            self.queue_table.setItem(row, 5, est_item)
+            
+            # Время сжатия
+            compression_time = self.processor.size_estimator.estimate_compression_time(
+                duration=info["duration"],
+                width=info.get("width", 1920),
+                height=info.get("height", 1080),
+                preset=preset,
+                codec=codec,
+                use_hardware=use_hardware
+            )
+            time_formatted = self.processor.size_estimator.format_duration(compression_time)
+            time_item = QTableWidgetItem(time_formatted)
+            self.queue_table.setItem(row, 6, time_item)
         
         self.queue_table.viewport().update()
 
@@ -461,7 +485,18 @@ class MainWindow(QMainWindow):
             height=info.get("height", 1080)
         )
 
-        self.estimated_label.setText(f"Примерный размер после сжатия: {est:.1f} МБ")
+        # Также добавляем время сжатия в метку
+        compression_time = self.processor.size_estimator.estimate_compression_time(
+            duration=info["duration"],
+            width=info.get("width", 1920),
+            height=info.get("height", 1080),
+            preset=self.current_preset(),
+            codec=codec,
+            use_hardware=self.hardware_radio.isChecked()
+        )
+        time_formatted = self.processor.size_estimator.format_duration(compression_time)
+
+        self.estimated_label.setText(f"Примерный размер: {est:.1f} МБ | Время сжатия: {time_formatted}")
 
     def check_vfr_status(self):
         if self.current_file:
