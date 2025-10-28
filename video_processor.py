@@ -1,6 +1,7 @@
 """
 Основной класс для обработки видео
 """
+import logging
 from pathlib import Path
 from typing import Optional, Callable
 from config import COMPRESSED_VIDEO_SUFFIX
@@ -91,14 +92,14 @@ class VideoProcessor:
                     process_setter: Optional[Callable] = None,
                     output_dir: Optional[str] = None) -> str:
         """Основной метод сжатия видео"""
-        print(f"[DEBUG] Starting compression:")
-        print(f"[DEBUG]   Input: {input_path}")
-        print(f"[DEBUG]   Output format: {output_format}")
-        print(f"[DEBUG]   Codec: {codec}")
-        print(f"[DEBUG]   CRF: {crf_value}")
-        print(f"[DEBUG]   Preset: {preset_value}")
-        print(f"[DEBUG]   Force VFR fix: {force_vfr_fix}")
-        print(f"[DEBUG]   Hardware encoding: {use_hardware}")
+        logging.debug(f"Starting compression:")
+        logging.debug(f"   Input: {input_path}")
+        logging.debug(f"   Output format: {output_format}")
+        logging.debug(f"   Codec: {codec}")
+        logging.debug(f"   CRF: {crf_value}")
+        logging.debug(f"   Preset: {preset_value}")
+        logging.debug(f"   Force VFR fix: {force_vfr_fix}")
+        logging.debug(f"   Hardware encoding: {use_hardware}")
         
         input_p = Path(input_path)
         if progress_callback: 
@@ -106,12 +107,12 @@ class VideoProcessor:
         
         video_info = self.get_video_info(input_path)
         if "error" in video_info: 
-            print(f"[ERROR] Error getting video info: {video_info['error']}")
+            logging.error(f"Error getting video info: {video_info['error']}")
             raise Exception(video_info["error"])
         
         duration = video_info.get("duration", 0)
         if duration <= 0:
-            print(f"[ERROR] Invalid video duration: {duration}")
+            logging.error(f"Invalid video duration: {duration}")
             raise Exception("Некорректная длительность видео")
         
         needs_fix = force_vfr_fix or video_info["needs_vfr_fix"]
@@ -121,19 +122,19 @@ class VideoProcessor:
         else:
             output_path = input_p.with_name(f"{input_p.stem}{COMPRESSED_VIDEO_SUFFIX}.{output_format}")
         
-        print(f"[DEBUG] Output file will be: {output_path}")
+        logging.debug(f"Output file will be: {output_path}")
         
         if output_path.exists():
             try:
                 output_path.unlink()
-                print(f"[DEBUG] Deleted existing file: {output_path}")
+                logging.debug(f"Deleted existing file: {output_path}")
             except Exception as e:
-                print(f"[ERROR] Error deleting existing file: {e}")
+                logging.error(f"Error deleting existing file: {e}")
         
         current_input = input_path
         try:
             if needs_fix:
-                print(f"[DEBUG] VFR fix is needed")
+                logging.debug(f"VFR fix is needed")
                 def vfr_progress(p, m): 
                     progress_callback(p, m) if progress_callback else None
                 success, msg = self.ffmpeg_handler.fix_vfr_target_crf(
@@ -141,11 +142,11 @@ class VideoProcessor:
                     preset_value, vfr_progress, duration, use_hardware, video_info, process_setter
                 )
                 if not success: 
-                    print(f"[ERROR] VFR fix failed: {msg}")
+                    logging.error(f"VFR fix failed: {msg}")
                     raise Exception(f"Ошибка VFR-fix: {msg}")
                 current_input = str(output_path)
             else:
-                print(f"[DEBUG] No VFR fix needed, proceeding with compression")
+                logging.debug(f"No VFR fix needed, proceeding with compression")
                 def compress_progress(p, m): 
                     progress_callback(p, m) if progress_callback else None
                 success, msg = self.ffmpeg_handler.compress_video_core(
@@ -153,26 +154,26 @@ class VideoProcessor:
                     preset_value, compress_progress, duration, video_info, use_hardware, process_setter
                 )
                 if not success: 
-                    print(f"[ERROR] Compression failed: {msg}")
-                    print(f"[DEBUG] Trying alternative method without subtitles...")
+                    logging.error(f"Compression failed: {msg}")
+                    logging.debug(f"Trying alternative method without subtitles...")
                     success, msg = self.ffmpeg_handler.compress_video_core_no_subtitles(
                         current_input, str(output_path), output_format, codec, crf_value, 
                         preset_value, compress_progress, duration, video_info, use_hardware, process_setter
                     )
                     if not success:
-                        print(f"[ERROR] Alternative method failed: {msg}")
-                        print(f"[DEBUG] Trying last method with full mapping but no data...")
+                        logging.error(f"Alternative method failed: {msg}")
+                        logging.debug(f"Trying last method with full mapping but no data...")
                         success, msg = self.ffmpeg_handler.compress_video_core_full_map(
                             current_input, str(output_path), output_format, codec, crf_value, 
                             preset_value, compress_progress, duration, video_info, use_hardware, process_setter
                         )
                         if not success:
-                            print(f"[ERROR] All methods failed: {msg}")
+                            logging.error(f"All methods failed: {msg}")
                             raise Exception(f"Ошибка сжатия: {msg}")
             if progress_callback: 
                 progress_callback(100, "Готово!")
-            print(f"[DEBUG] Compression completed successfully")
+            logging.debug(f"Compression completed successfully")
             return str(output_path)
         except Exception as e:
-            print(f"[ERROR] Exception during compression: {str(e)}")
+            logging.error(f"Exception during compression: {str(e)}")
             raise e

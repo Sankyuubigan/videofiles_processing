@@ -1,11 +1,13 @@
 import sys
 import os
+import logging
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QPushButton, QLabel, QFileDialog,
                                QProgressBar, QTextEdit, QGroupBox,
                                QMessageBox, QComboBox, QCheckBox, QSlider,
                                QRadioButton, QButtonGroup,
-                               QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
+                               QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+                               QTabWidget, QToolButton)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 from config import (OUTPUT_FORMATS, CODECS, DEFAULT_OUTPUT_FORMAT_KEY, DEFAULT_CODEC_KEY,
@@ -14,9 +16,13 @@ from video_processor import VideoProcessor
 from ffmpeg_downloader import FFmpegDownloader
 from dialogs import VideoInfoDialog
 from threads import WorkerThread
+from gui_logger import setup_logging
 
 
 class MainWindow(QMainWindow):
+    # Signal to be used by the logging handler
+    log_signal = Signal(str)
+
     def __init__(self):
         super().__init__()
         self.processor = VideoProcessor()
@@ -36,17 +42,39 @@ class MainWindow(QMainWindow):
         # Путь для сохранения файлов
         self.output_directory = None
         
+        # Setup logging
+        setup_logging(self.log_slot)
+        
         self.init_ui()
 
     def init_ui(self):
         self.setWindowTitle("Video Compressor")
-        self.setGeometry(100, 100, 1200, 700)  # Расширил для нового столбца
+        self.setGeometry(100, 100, 1200, 700)
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
 
+        # Создаем вкладки
+        self.tab_widget = QTabWidget()
+        main_layout.addWidget(self.tab_widget)
+        
+        # Первая вкладка - Основная
+        self.main_tab = QWidget()
+        self.tab_widget.addTab(self.main_tab, "Основная")
+        main_tab_layout = QVBoxLayout(self.main_tab)
+        
+        # Вторая вкладка - Логи
+        self.log_tab = QWidget()
+        self.tab_widget.addTab(self.log_tab, "Логи")
+        log_tab_layout = QVBoxLayout(self.log_tab)
+        
+        # Создаем текстовое поле для логов на второй вкладке
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        log_tab_layout.addWidget(self.log_text)
+
         file_group = self.create_file_group()
-        main_layout.addWidget(file_group)
+        main_tab_layout.addWidget(file_group)
 
         # Группа с таблицей очереди
         queue_group = QGroupBox("Очередь файлов")
@@ -54,10 +82,10 @@ class MainWindow(QMainWindow):
         
         # Создаем таблицу для очереди файлов
         self.queue_table = QTableWidget()
-        self.queue_table.setColumnCount(7) # Увеличено до 7 столбцов
+        self.queue_table.setColumnCount(8) # Увеличено до 8 столбцов (добавляем кнопки)
         self.queue_table.setHorizontalHeaderLabels([
             "Имя файла", "Размер", "Длительность", "Статус VFR", 
-            "Сложность", "Примерный размер", "Время сжатия"
+            "Сложность", "Примерный размер", "Время сжатия", "Действия"
         ])
         self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.queue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -66,30 +94,20 @@ class MainWindow(QMainWindow):
         self.queue_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.queue_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.queue_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.queue_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.queue_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.queue_table.setAlternatingRowColors(True)
         
         queue_layout.addWidget(self.queue_table)
         queue_group.setLayout(queue_layout)
-        main_layout.addWidget(queue_group)
-
-        self.estimated_label = QLabel("Примерный размер после сжатия: —")
-        main_layout.addWidget(self.estimated_label)
+        main_tab_layout.addWidget(queue_group)
 
         settings_group = self.create_settings_group()
-        main_layout.addWidget(settings_group)
+        main_tab_layout.addWidget(settings_group)
 
         process_group = self.create_process_group()
-        main_layout.addWidget(process_group)
-
-        log_group = QGroupBox("Лог")
-        log_layout = QVBoxLayout()
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        log_layout.addWidget(self.log_text)
-        log_group.setLayout(log_layout)
-        main_layout.addWidget(log_group)
+        main_tab_layout.addWidget(process_group)
 
         self.on_format_changed()
         self.setAcceptDrops(True)
@@ -102,9 +120,6 @@ class MainWindow(QMainWindow):
         self.file_label.setWordWrap(True)
         self.select_file_btn = QPushButton("Выбрать файл(ы)")
         self.select_file_btn.clicked.connect(self.select_files)
-        self.info_btn = QPushButton("Информация о файле")
-        self.info_btn.clicked.connect(self.show_info)
-        self.info_btn.setEnabled(False)
         
         # Кнопка выбора пути сохранения
         self.output_dir_btn = QPushButton("Путь сохранения")
@@ -114,7 +129,6 @@ class MainWindow(QMainWindow):
         self.output_dir_label.setStyleSheet("color: gray; font-size: 10px;")
         
         file_select_layout.addWidget(self.select_file_btn)
-        file_select_layout.addWidget(self.info_btn)
         file_select_layout.addWidget(self.output_dir_btn)
         file_select_layout.addStretch()
         file_layout.addLayout(file_select_layout)
@@ -229,7 +243,7 @@ class MainWindow(QMainWindow):
         process_layout.addLayout(buttons_layout)
         
         self.progress_bar = QProgressBar()
-        self.status_label = QLabel("Грузен к работе")
+        self.status_label = QLabel("Готов к работе")
         process_layout.addWidget(self.progress_bar)
         process_layout.addWidget(self.status_label)
         process_group.setLayout(process_layout)
@@ -256,7 +270,7 @@ class MainWindow(QMainWindow):
             self.output_directory = directory
             self.output_dir_label.setText(directory)
             self.output_dir_label.setStyleSheet("color: green; font-size: 10px;")
-            self.log_text.append(f"Выбрана папка для сохранения: {directory}")
+            logging.info(f"Выбрана папка для сохранения: {directory}")
         else:
             self.output_directory = None
             self.output_dir_label.setText("Сохранять в папке с оригиналами")
@@ -266,17 +280,17 @@ class MainWindow(QMainWindow):
         if os.path.isfile(file_path):
             info = self.processor.get_video_info(file_path)
             if "error" not in info:
-                # Логируем сложность в консоль
+                # Логируем сложность
                 complexity_score = info.get('complexity_score', 0)
                 complexity_desc = info.get('complexity_desc', 'Не определено')
-                print(f"--- Анализ файла: {os.path.basename(file_path)} ---")
-                print(f"Сложность: {complexity_desc} ({complexity_score}/10)")
-                print("------------------------------------")
+                logging.info(f"--- Анализ файла: {os.path.basename(file_path)} ---")
+                logging.info(f"Сложность: {complexity_desc} ({complexity_score}/10)")
+                logging.info("------------------------------------")
                 
                 self.file_queue.append((file_path, info))
                 self.update_queue_table()
                 self.update_queue_label()
-                print(f"Файл добавлен в очередь: {file_path}")
+                logging.info(f"Файл добавлен в очередь: {file_path}")
                 
                 # Если это первый файл и нет текущего, устанавливаем его как текущий
                 if len(self.file_queue) == 1 and self.current_file is None:
@@ -284,7 +298,13 @@ class MainWindow(QMainWindow):
                     self.set_current_file(self.current_file, self.current_info)
 
     def update_queue_table(self):
-        self.queue_table.setRowCount(len(self.file_queue))
+        # Показываем текущий файл и файлы из очереди
+        all_files = []
+        if self.current_file:
+            all_files.append((self.current_file, self.current_info))
+        all_files.extend(self.file_queue)
+
+        self.queue_table.setRowCount(len(all_files))
         
         crf_value = self.crf_slider.value()
         codec = self.current_codec()
@@ -292,7 +312,7 @@ class MainWindow(QMainWindow):
         force_vfr_fix = self.vfr_checkbox.isChecked()
         preset = self.current_preset()
         
-        for row, (file_path, info) in enumerate(self.file_queue):
+        for row, (file_path, info) in enumerate(all_files):
             file_name_item = QTableWidgetItem(os.path.basename(file_path))
             self.queue_table.setItem(row, 0, file_name_item)
             
@@ -349,8 +369,90 @@ class MainWindow(QMainWindow):
             time_formatted = self.processor.size_estimator.format_duration(compression_time)
             time_item = QTableWidgetItem(time_formatted)
             self.queue_table.setItem(row, 6, time_item)
+            
+            # Кнопки действий
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(2, 2, 2, 2)
+            actions_layout.setSpacing(2)
+            
+            # Кнопка информации
+            info_btn = QToolButton()
+            info_btn.setText("ℹ")
+            info_btn.setToolTip("Информация о файле")
+            info_btn.setProperty("video_info", info)
+            info_btn.clicked.connect(self.on_info_button_clicked)
+            info_btn.setFixedSize(24, 24)
+            
+            # Кнопка удаления
+            delete_btn = QToolButton()
+            delete_btn.setText("✕")
+            delete_btn.setToolTip("Удалить из очереди")
+            # Привязываем к пути к файлу, а не к индексу
+            delete_btn.setProperty("file_path", file_path)
+            delete_btn.clicked.connect(self.on_delete_button_clicked)
+            delete_btn.setFixedSize(24, 24)
+            
+            actions_layout.addWidget(info_btn)
+            actions_layout.addWidget(delete_btn)
+            actions_layout.addStretch()
+            
+            self.queue_table.setCellWidget(row, 7, actions_widget)
         
         self.queue_table.viewport().update()
+
+    def on_info_button_clicked(self):
+        button = self.sender()
+        if button:
+            info = button.property("video_info")
+            if info:
+                self.show_info_dialog(info)
+
+    def on_delete_button_clicked(self):
+        button = self.sender()
+        if button:
+            file_path_to_delete = button.property("file_path")
+            if file_path_to_delete:
+                self.remove_from_queue(file_path_to_delete)
+
+    def remove_from_queue(self, file_path_to_delete):
+        """Удаляет файл из очереди или с текущей позиции по его пути"""
+        file_removed = False
+        
+        # Сначала проверяем, не является ли файл текущим
+        if self.current_file == file_path_to_delete:
+            logging.info(f"Текущий файл {os.path.basename(file_path_to_delete)} удален.")
+            self.current_file = None
+            self.current_info = None
+            self._cached_info = None
+            file_removed = True
+            
+            # Если в очереди есть файлы, делаем следующий текущим
+            if self.file_queue:
+                self.current_file, self.current_info = self.file_queue.pop(0)
+                self.set_current_file(self.current_file, self.current_info)
+            else:
+                # Если очередь пуста, сбрасываем UI
+                self.set_ui_enabled(False)
+                self.file_label.setText("Перетащите файлы сюда или нажмите 'Выбрать'")
+                self.process_btn.setEnabled(False)
+                self.vfr_status_label.setText("Статус VFR: Не определено")
+                self.vfr_status_label.setStyleSheet("color: gray;")
+        else:
+            # Иначе ищем в очереди
+            try:
+                index = next(i for i, (path, _) in enumerate(self.file_queue) if path == file_path_to_delete)
+                self.file_queue.pop(index)
+                logging.info(f"Файл удален из очереди: {os.path.basename(file_path_to_delete)}")
+                file_removed = True
+            except StopIteration:
+                logging.error(f"Не удалось найти файл для удаления: {file_path_to_delete}")
+
+        if file_removed:
+            # Обновляем таблицу и метку в любом случае
+            self.update_queue_table()
+            self.update_queue_label()
+
 
     def process_first_in_queue(self):
         if self.file_queue and self.current_file is None:
@@ -359,6 +461,7 @@ class MainWindow(QMainWindow):
             self.set_current_file(self.current_file, self.current_info)
 
     def update_queue_label(self):
+        # Считаем текущий файл как "в обработке", а не в очереди
         self.queue_label.setText(f"В очереди: {len(self.file_queue)} файлов")
 
     def select_files(self):
@@ -373,10 +476,8 @@ class MainWindow(QMainWindow):
     def set_current_file(self, file_path, file_info):
         self.file_label.setText(f"Текущий файл: {os.path.basename(file_path)}")
         self.process_btn.setEnabled(True)
-        self.info_btn.setEnabled(True)
         self._cached_info = file_info
         self.check_vfr_status()
-        self.update_estimated_size(self.crf_slider.value(), self.current_codec())
 
     def current_codec(self):
         return self.codec_combo.currentData()
@@ -427,7 +528,6 @@ class MainWindow(QMainWindow):
         self.crf_slider.setRange(codec_details["crf_min"], codec_details["crf_max"])
         self.crf_slider.setValue(codec_details["crf_default"])
         self.on_crf_changed(codec_details["crf_default"])
-        self.update_estimated_size(self.crf_slider.value(), codec_key)
         self.update_queue_table()
 
     def on_codec_changed(self):
@@ -441,15 +541,12 @@ class MainWindow(QMainWindow):
         self.crf_slider.setRange(codec_details["crf_min"], codec_details["crf_max"])
         self.crf_slider.setValue(codec_details["crf_default"])
         self.on_crf_changed(codec_details["crf_default"])
-        self.update_estimated_size(self.crf_slider.value(), codec_key)
         self.update_queue_table()
 
     def on_preset_changed(self):
-        self.update_estimated_size(self.crf_slider.value(), self.current_codec())
         self.update_queue_table()
 
     def on_encoding_changed(self):
-        self.update_estimated_size(self.crf_slider.value(), self.current_codec())
         self.update_queue_table()
 
     def on_crf_changed(self, value):
@@ -457,46 +554,7 @@ class MainWindow(QMainWindow):
             self.crf_label.setText("CRF: только VFR-fix (copy)")
         else:
             self.crf_label.setText(f"CRF: {value}")
-        self.update_estimated_size(value, self.current_codec())
         self.update_queue_table()
-
-    def update_estimated_size(self, crf, codec):
-        if not self.current_file:
-            self.estimated_label.setText("Примерный размер после сжатия: —")
-            return
-        
-        info = self._cached_info if self._cached_info else None
-        
-        if info is None:
-            return
-
-        complexity_score = info.get('complexity_score', 5)
-        est = self.processor.estimated_size_mb(
-            video_bitrate=info.get("video_bitrate", 0),
-            audio_bitrate=info.get("audio_bitrate", 128000),
-            duration=info["duration"],
-            crf=crf,
-            codec=codec,
-            needs_vfr_fix=info.get('needs_vfr_fix', False) or self.vfr_checkbox.isChecked(),
-            use_hardware=self.hardware_radio.isChecked(),
-            preset=self.current_preset(),
-            complexity_score=complexity_score,
-            width=info.get("width", 1920),
-            height=info.get("height", 1080)
-        )
-
-        # Также добавляем время сжатия в метку
-        compression_time = self.processor.size_estimator.estimate_compression_time(
-            duration=info["duration"],
-            width=info.get("width", 1920),
-            height=info.get("height", 1080),
-            preset=self.current_preset(),
-            codec=codec,
-            use_hardware=self.hardware_radio.isChecked()
-        )
-        time_formatted = self.processor.size_estimator.format_duration(compression_time)
-
-        self.estimated_label.setText(f"Примерный размер: {est:.1f} МБ | Время сжатия: {time_formatted}")
 
     def check_vfr_status(self):
         if self.current_file:
@@ -508,17 +566,13 @@ class MainWindow(QMainWindow):
                 self.vfr_status_label.setText("Статус VFR: Не требуется")
                 self.vfr_status_label.setStyleSheet("color: green;")
 
-    def show_info(self):
-        if self.current_file and self._cached_info:
-            self.show_info_dialog(self._cached_info)
-
     def show_info_dialog(self, info):
         dialog = VideoInfoDialog(info, self)
         dialog.exec()
 
     def start_processing(self):
         if not self.current_file:
-            self.log_text.append("Предупреждение: Сначала выберите файл")
+            logging.warning("Предупреждение: Сначала выберите файл")
             return
         
         # Инициализация пакета, если это первый файл
@@ -527,7 +581,7 @@ class MainWindow(QMainWindow):
             # Считаем общее количество файлов: текущий + те, что в очереди
             self.total_files_in_batch = len(self.file_queue) + (1 if self.current_file else 0)
             self.completed_files_in_batch = 0
-            print(f"Начало обработки пакета из {self.total_files_in_batch} файла(ов).")
+            logging.info(f"Начало обработки пакета из {self.total_files_in_batch} файла(ов).")
         
         self.processing_stopped = False
         
@@ -554,13 +608,13 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             self.processing_stopped = True
             if self.compression_worker:
-                self.log_text.append("Отмена процесса сжатия и всей очереди...")
+                logging.info("Отмена процесса сжатия и всей очереди...")
                 self.status_label.setText("Отмена процесса...")
                 self.compression_worker.stop()
                 QTimer.singleShot(1000, self.on_canceled)
 
     def on_canceled(self):
-        self.log_text.append("Процесс сжатия и обработка очереди отменены пользователем")
+        logging.info("Процесс сжатия и обработка очереди отменены пользователем")
         self.status_label.setText("Отменено пользователем")
         self.progress_bar.setValue(0)
         
@@ -573,10 +627,8 @@ class MainWindow(QMainWindow):
         self.current_info = None
         self.set_ui_enabled(True)
         self.file_label.setText("Перетащите файлы сюда или нажмите 'Выбрать'")
-        self.status_label.setText("Гайден к работе")
+        self.status_label.setText("Готов к работе")
         self.progress_bar.setValue(0)
-        self.info_btn.setEnabled(False)
-        self.process_btn.setEnabled(False)
 
     def run_compression_worker(self, **kwargs):
         self.compression_worker = WorkerThread(self.processor, 'compress', **kwargs)
@@ -625,10 +677,10 @@ class MainWindow(QMainWindow):
         """Внутренний метод для обновления счетчика обработанных файлов."""
         if self.batch_in_progress:
             self.completed_files_in_batch += 1
-            print(f"Файл обработан. Прогресс по пакету: {self.completed_files_in_batch}/{self.total_files_in_batch}")
+            logging.info(f"Файл обработан. Прогресс по пакету: {self.completed_files_in_batch}/{self.total_files_in_batch}")
 
     def on_finished(self, result):
-        self.log_text.append(f"Готово: {result}")
+        logging.info(f"Готово: {result}")
         self._handle_file_completion()
         
         if not self.processing_stopped:
@@ -637,7 +689,7 @@ class MainWindow(QMainWindow):
             self.on_canceled()
 
     def on_error(self, error):
-        self.log_text.append(f"ОШИБКА: {error}")
+        logging.error(f"ОШИБКА: {error}")
         self.status_label.setText("Ошибка при обработке!")
         if self.sender() == self.compression_worker:
             self.compression_worker = None
@@ -670,7 +722,7 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             # Пакет завершен
             if self.batch_in_progress:
-                print("Обработка пакета завершена.")
+                logging.info("Обработка пакета завершена.")
                 self.batch_in_progress = False
                 self.total_files_in_batch = 0
                 self.completed_files_in_batch = 0
@@ -679,15 +731,12 @@ class MainWindow(QMainWindow):
             self.file_label.setText("Перетащите файлы сюда или нажмите 'Выбрать'")
             self.status_label.setText("Готов к работе")
             self.progress_bar.setValue(0)
-            self.info_btn.setEnabled(False)
-            self.process_btn.setEnabled(False)
 
     def set_ui_enabled(self, enabled):
         self.select_file_btn.setEnabled(enabled)
         self.process_btn.setEnabled(enabled and self.current_file is not None)
         self.cancel_btn.setEnabled(not enabled and self.current_file is not None)
         self.cancel_btn.setVisible(not enabled and self.current_file is not None)
-        self.info_btn.setEnabled(enabled and self.current_file is not None)
         self.format_combo.setEnabled(enabled)
         self.codec_combo.setEnabled(enabled)
         self.preset_combo.setEnabled(enabled)
@@ -696,6 +745,10 @@ class MainWindow(QMainWindow):
         self.hardware_radio.setEnabled(enabled)
         self.software_radio.setEnabled(enabled)
         self.output_dir_btn.setEnabled(enabled)
+
+    def log_slot(self, message):
+        """Слот для приема сообщений лога от QtHandler"""
+        self.log_text.append(message)
 
     def closeEvent(self, event):
         if self.compression_worker and self.compression_worker.isRunning():
@@ -722,21 +775,24 @@ def main():
     
     # Проверка и вывод информации о среде выполнения
     processor = VideoProcessor()
-    print("--- Информация о среде выполнения ---")
+    
+    # Выводим информацию о среде выполнения в лог
+    logging.info("--- Информация о среде выполнения ---")
     gpu_info = processor.get_gpu_info()
-    print(gpu_info)
+    logging.info(gpu_info)
     if "Доступные GPU" in gpu_info:
-        print("-> Обнаружена поддержка аппаратного кодирования (GPU).")
-        print("-> В настройках программы можно выбрать тип кодирования: 'Ащапаратное (NVENC)' или 'Программное (CPU)'.")
+        logging.info("-> Обнаружена поддержка аппаратного кодирования (GPU).")
+        logging.info("-> В настройках программы можно выбрать тип кодирования: 'Аппаратное (NVENC)' или 'Программное (CPU)'.")
     else:
-        print("-> Аппаратное кодирование не обнаружено. Сжатие будет выполняться на процессоре (CPU).")
-    print("------------------------------------\n")
+        logging.info("-> Аппаратное кодирование не обнаружено. Сжатие будет выполняться на процессоре (CPU).")
+    logging.info("------------------------------------\n")
 
     if not os.path.exists("ffmpeg.exe") or not os.path.exists("ffprobe.exe"):
         downloader = FFmpegDownloader()
         if not downloader.check_and_download():
-            print("Критическая ошибка: FFmpeg не найден и не может быть скачан. Приложение будет закрыто.")
+            logging.critical("Критическая ошибка: FFmpeg не найден и не может быть скачан. Приложение будет закрыто.")
             return -1
+    
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

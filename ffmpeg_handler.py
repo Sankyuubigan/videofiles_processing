@@ -5,6 +5,7 @@ import subprocess
 import json
 import os
 import platform
+import logging
 from pathlib import Path
 from typing import Optional, Callable, List, Dict, Tuple
 from config import (TEMP_FIXED_VIDEO_SUFFIX, COMPRESSED_VIDEO_SUFFIX, 
@@ -51,7 +52,7 @@ class FFmpegHandler:
     def _run_command_with_progress(self, cmd: list, progress_callback: Optional[Callable[[int, str], None]], 
                                   duration_seconds: Optional[float], stage_name: str, 
                                   process_setter: Optional[Callable] = None) -> tuple[bool, str]:
-        print(f"[DEBUG] Executing FFmpeg command: {' '.join(cmd)}")
+        logging.debug(f"Executing FFmpeg command: {' '.join(cmd)}")
         startupinfo = self._get_platform_specific_startupinfo()
         process = subprocess.Popen(
             cmd,
@@ -86,31 +87,31 @@ class FFmpegHandler:
         full_output_message = "".join(output_log)
         
         if return_code != 0:
-            print(f"[ERROR] FFmpeg failed with return code: {return_code}")
-            print(f"[ERROR] Command: {' '.join(cmd)}")
-            print(f"[ERROR] Error lines found:")
+            logging.error(f"FFmpeg failed with return code: {return_code}")
+            logging.error(f"Command: {' '.join(cmd)}")
+            logging.error(f"Error lines found:")
             for error_line in error_lines:
-                print(f"[ERROR] {error_line}")
+                logging.error(f"  {error_line}")
             
             if len(cmd) > 3 and cmd[1] == "-i":
                 input_file = cmd[2]
-                print(f"[ERROR] Detailed info about input file:")
+                logging.error(f"Detailed info about input file:")
                 try:
                     probe_cmd = [self.ffprobe_path, "-v", "error", "-show_format", "-show_streams", input_file]
                     probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
                     if probe_result.returncode == 0:
-                        print(f"[ERROR] FFprobe output:\n{probe_result.stdout}")
+                        logging.error(f"FFprobe output:\n{probe_result.stdout}")
                     else:
-                        print(f"[ERROR] FFprobe failed: {probe_result.stderr}")
+                        logging.error(f"FFprobe failed: {probe_result.stderr}")
                 except Exception as e:
-                    print(f"[ERROR] Failed to get detailed info: {str(e)}")
+                    logging.error(f"Failed to get detailed info: {str(e)}")
             
             error_summary = "\n".join(full_output_message.strip().split('\n')[-15:])
             error_message = f"Ошибка FFmpeg (код {return_code}).\nЛог:\n{error_summary}\n\nДетальные ошибки:\n" + "\n".join(error_lines[-10:])
-            print(error_message)
+            logging.error(error_message)
             return False, error_message
         else:
-            print(f"[DEBUG] FFmpeg command completed successfully")
+            logging.debug(f"FFmpeg command completed successfully")
             return True, "Команда FFmpeg успешно выполнена."
     
     def get_gpu_info(self) -> str:
@@ -163,7 +164,7 @@ class FFmpegHandler:
             return []
     
     def get_video_info(self, input_path: str) -> dict:
-        print(f"[DEBUG] Getting video info for: {input_path}")
+        logging.debug(f"Getting video info for: {input_path}")
         cmd = [self.ffprobe_path, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", input_path]
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=30, startupinfo=self._get_platform_specific_startupinfo())
@@ -176,7 +177,7 @@ class FFmpegHandler:
                     except UnicodeDecodeError:
                         stderr_text = result.stderr.decode('ascii', errors='replace')
                 
-                print(f"[ERROR] FFprobe failed with code {result.return_code}: {stderr_text}")
+                logging.error(f"FFprobe failed with code {result.return_code}: {stderr_text}")
                 return {"error": f"Ошибка ffprobe: {stderr_text}"}
             
             try:
@@ -190,7 +191,7 @@ class FFmpegHandler:
             data = json.loads(output_text)
             video_stream = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
             if not video_stream: 
-                print(f"[ERROR] No video stream found in file")
+                logging.error(f"No video stream found in file")
                 return {"error": "Видеопоток не найден"}
             
             format_info = data.get("format", {})
@@ -198,13 +199,13 @@ class FFmpegHandler:
             
             try:
                 size_bytes = os.path.getsize(input_path)
-                print(f"[DEBUG] get_video_info: Actual file size from filesystem: {size_bytes} bytes")
+                logging.debug(f"get_video_info: Actual file size from filesystem: {size_bytes} bytes")
             except Exception as e:
-                print(f"[DEBUG] get_video_info: Error getting file size: {e}")
+                logging.debug(f"get_video_info: Error getting file size: {e}")
                 size_bytes = int(format_info.get("size", 0))
             
             size_mb = size_bytes / (1024 * 1024)
-            print(f"[DEBUG] get_video_info: File size in MB: {size_mb:.2f} MB")
+            logging.debug(f"get_video_info: File size in MB: {size_mb:.2f} MB")
             
             total_bitrate = int(format_info.get("bit_rate", 0))
             if total_bitrate == 0 and duration > 0:
@@ -214,7 +215,7 @@ class FFmpegHandler:
                 audio_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
                 audio_bitrate = sum(int(s.get("bit_rate", 128000)) for s in audio_streams) if audio_streams else 128000
                 video_bitrate = max(0, total_bitrate - audio_bitrate)
-                print(f"[DEBUG] get_video_info: Used fallback for video_bitrate. Calculated: {video_bitrate} bit/s")
+                logging.debug(f"get_video_info: Used fallback for video_bitrate. Calculated: {video_bitrate} bit/s")
             audio_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
             audio_bitrate = sum(int(s.get("bit_rate", 128000)) for s in audio_streams) if audio_streams else 128000
             
@@ -222,22 +223,22 @@ class FFmpegHandler:
             subtitle_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "subtitle"]
             has_subtitles = len(subtitle_streams) > 0
             
-            print(f"[DEBUG] Video stream info:")
-            print(f"[DEBUG]   Codec: {video_stream.get('codec_name', 'unknown')}")
-            print(f"[DEBUG]   Resolution: {video_stream.get('width', 0)}x{video_stream.get('height', 0)}")
-            print(f"[DEBUG]   Pixel format: {video_stream.get('pix_fmt', 'unknown')}")
-            print(f"[DEBUG]   Frame rate: {video_stream.get('avg_frame_rate', 'unknown')}")
-            print(f"[DEBUG]   Bitrate: {video_bitrate}")
+            logging.debug(f"Video stream info:")
+            logging.debug(f"  Codec: {video_stream.get('codec_name', 'unknown')}")
+            logging.debug(f"  Resolution: {video_stream.get('width', 0)}x{video_stream.get('height', 0)}")
+            logging.debug(f"  Pixel format: {video_stream.get('pix_fmt', 'unknown')}")
+            logging.debug(f"  Frame rate: {video_stream.get('avg_frame_rate', 'unknown')}")
+            logging.debug(f"  Bitrate: {video_bitrate}")
             
-            print(f"[DEBUG] Audio streams info:")
+            logging.debug(f"Audio streams info:")
             for i, stream in enumerate(audio_streams):
-                print(f"[DEBUG]   Stream {i}:")
-                print(f"[DEBUG]     Codec: {stream.get('codec_name', 'unknown')}")
-                print(f"[DEBUG]     Sample rate: {stream.get('sample_rate', 'unknown')}")
-                print(f"[DEBUG]     Channels: {stream.get('channels', 0)}")
-                print(f"[DEBUG]     Bitrate: {stream.get('bit_rate', 'unknown')}")
+                logging.debug(f"  Stream {i}:")
+                logging.debug(f"    Codec: {stream.get('codec_name', 'unknown')}")
+                logging.debug(f"    Sample rate: {stream.get('sample_rate', 'unknown')}")
+                logging.debug(f"    Channels: {stream.get('channels', 0)}")
+                logging.debug(f"    Bitrate: {stream.get('bit_rate', 'unknown')}")
             
-            print(f"[DEBUG] Subtitle streams info: {len(subtitle_streams)} found")
+            logging.debug(f"Subtitle streams info: {len(subtitle_streams)} found")
             
             fps_str = video_stream.get("avg_frame_rate", "0/1")
             num, den = map(int, fps_str.split('/'))
@@ -265,7 +266,7 @@ class FFmpegHandler:
                 "audio_tracks": self.get_audio_tracks(input_path)
             }
         except Exception as e:
-            print(f"[ERROR] Exception in get_video_info: {str(e)}")
+            logging.error(f"Exception in get_video_info: {str(e)}")
             return {"error": f"Исключение при получении информации: {str(e)}"}
     
     def fix_vfr_target_crf(self, input_path: str, output_path: str,
@@ -273,24 +274,24 @@ class FFmpegHandler:
                           progress_callback: Optional[Callable], duration_seconds: float, 
                           use_hardware: bool = False, video_info: dict = None,
                           process_setter: Optional[Callable] = None) -> tuple[bool, str]:
-        print(f"[DEBUG] Starting VFR fix with compression:")
-        print(f"[DEBUG]   Input: {input_path}")
-        print(f"[DEBUG]   Output: {output_path}")
-        print(f"[DEBUG]   Format: {output_format}")
-        print(f"[DEBUG]   Codec: {codec}")
-        print(f"[DEBUG]   CRF: {crf_value}")
-        print(f"[DEBUG]   Preset: {preset_value}")
+        logging.debug(f"Starting VFR fix with compression:")
+        logging.debug(f"  Input: {input_path}")
+        logging.debug(f"  Output: {output_path}")
+        logging.debug(f"  Format: {output_format}")
+        logging.debug(f"  Codec: {codec}")
+        logging.debug(f"  CRF: {crf_value}")
+        logging.debug(f"  Preset: {preset_value}")
         
         gpu_info = self.get_gpu_info()
         has_nvenc = "NVIDIA NVENC" in gpu_info
-        print(f"[DEBUG] GPU info: {gpu_info}")
-        print(f"[DEBUG] Has NVENC: {has_nvenc}")
+        logging.debug(f"GPU info: {gpu_info}")
+        logging.debug(f"Has NVENC: {has_nvenc}")
         
         cmd = [self.ffmpeg_path, "-y"]
         
         if video_info and video_info.get("is_hevc", False) and has_nvenc:
             cmd.extend(["-hwaccel", "cuda"])
-            print(f"[DEBUG] Using CUDA hardware acceleration for HEVC decoding")
+            logging.debug(f"Using CUDA hardware acceleration for HEVC decoding")
         
         cmd.extend(["-i", input_path])
         
@@ -299,62 +300,62 @@ class FFmpegHandler:
         
         if video_info and video_info.get("is_10bit", False) and codec != "libx265":
             vf_filters.append("format=yuv420p")
-            print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
+            logging.debug(f"Adding 10-bit to 8-bit conversion filter")
         
         if vf_filters:
             cmd.extend(["-vf", ",".join(vf_filters)])
-            print(f"[DEBUG] Added video filters: {','.join(vf_filters)}")
+            logging.debug(f"Added video filters: {','.join(vf_filters)}")
         
         if codec == "libvpx-vp9":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "vp9_nvenc", "-crf", str(crf_value), "-b:v", "0"])
-                print(f"[DEBUG] Using VP9 hardware encoder")
+                logging.debug(f"Using VP9 hardware encoder")
             else:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
-                print(f"[DEBUG] Using VP9 software encoder")
+                logging.debug(f"Using VP9 software encoder")
             cmd.extend(["-c:a", "copy"])
-            print(f"[DEBUG] Copying audio streams as-is")
+            logging.debug(f"Copying audio streams as-is")
         elif codec == "libx265":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "hevc_nvenc", "-crf", str(crf_value), "-preset", "p6", "-tune", "ll"])
-                print(f"[DEBUG] Using HEVC hardware encoder with tune=ll")
+                logging.debug(f"Using HEVC hardware encoder with tune=ll")
             else:
                 cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
-                print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
+                logging.debug(f"Using HEVC software encoder with preset: {preset_value}")
             cmd.extend(["-c:a", "copy"])
-            print(f"[DEBUG] Copying audio streams as-is")
+            logging.debug(f"Copying audio streams as-is")
         else:  # libx264
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "h264_nvenc", "-cq", str(crf_value), "-preset", "p6", "-tune", "ll"])
-                print(f"[DEBUG] Using H.264 hardware encoder with tune=ll")
+                logging.debug(f"Using H.264 hardware encoder with tune=ll")
             else:
                 cmd.extend(["-c:v", "libx264", "-crf", str(crf_value), "-preset", preset_value])
-                print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
+                logging.debug(f"Using H.264 software encoder with preset: {preset_value}")
             cmd.extend(["-c:a", "copy"])
-            print(f"[DEBUG] Copying audio streams as-is")
+            logging.debug(f"Copying audio streams as-is")
         
         # Добавляем субтитры, только если они есть
         if video_info and video_info.get("has_subtitles", False):
             if output_format == "mp4":
                 cmd.extend(["-c:s", "mov_text"])
-                print(f"[DEBUG] Using mov_text for subtitles")
+                logging.debug(f"Using mov_text for subtitles")
             else:
                 cmd.extend(["-c:s", "copy"])
-                print(f"[DEBUG] Copying subtitles as-is")
+                logging.debug(f"Copying subtitles as-is")
             
             cmd.extend(["-map", "0:V", "-map", "0:a", "-map", "0:s"])
-            print(f"[DEBUG] Mapping video, audio and subtitle streams (excluding cover art)")
+            logging.debug(f"Mapping video, audio and subtitle streams (excluding cover art)")
         else:
             cmd.extend(["-map", "0:V", "-map", "0:a"])
-            print(f"[DEBUG] Mapping video and audio streams only (no subtitles found)")
+            logging.debug(f"Mapping video and audio streams only (no subtitles found)")
         
         if output_format == "mp4":
             cmd.extend(["-movflags", "+faststart"])
-            print(f"[DEBUG] Added faststart flag for MP4")
+            logging.debug(f"Added faststart flag for MP4")
             
         cmd.extend(["-progress", "pipe:1", output_path])
-        print(f"[DEBUG] Final command: {' '.join(cmd)}")
+        logging.debug(f"Final command: {' '.join(cmd)}")
         
         return self._run_command_with_progress(cmd, progress_callback, duration_seconds, "VFR-fix+сжатие", process_setter)
     
@@ -362,13 +363,13 @@ class FFmpegHandler:
                            preset_value: str, progress_callback: Optional[Callable], duration_seconds: float, 
                            video_info: dict = None, use_hardware: bool = False,
                            process_setter: Optional[Callable] = None) -> tuple[bool, str]:
-        print(f"[DEBUG] Starting direct compression:")
-        print(f"[DEBUG]   Input: {input_path}")
-        print(f"[DEBUG]   Output: {output_path}")
-        print(f"[DEBUG]   Format: {output_format}")
-        print(f"[DEBUG]   Codec: {codec}")
-        print(f"[DEBUG]   CRF: {crf_value}")
-        print(f"[DEBUG]   Preset: {preset_value}")
+        logging.debug(f"Starting direct compression:")
+        logging.debug(f"  Input: {input_path}")
+        logging.debug(f"  Output: {output_path}")
+        logging.debug(f"  Format: {output_format}")
+        logging.debug(f"  Codec: {codec}")
+        logging.debug(f"  CRF: {crf_value}")
+        logging.debug(f"  Preset: {preset_value}")
         
         if video_info is None:
             video_info = self.get_video_info(input_path)
@@ -377,14 +378,14 @@ class FFmpegHandler:
         
         gpu_info = self.get_gpu_info()
         has_nvenc = "NVIDIA NVENC" in gpu_info
-        print(f"[DEBUG] GPU info: {gpu_info}")
-        print(f"[DEBUG] Has NVENC: {has_nvenc}")
+        logging.debug(f"GPU info: {gpu_info}")
+        logging.debug(f"Has NVENC: {has_nvenc}")
         
         cmd = [self.ffmpeg_path, "-y"]
         
         if video_info.get("is_hevc", False) and has_nvenc:
             cmd.extend(["-hwaccel", "cuda"])
-            print(f"[DEBUG] Using CUDA hardware acceleration for HEVC decoding")
+            logging.debug(f"Using CUDA hardware acceleration for HEVC decoding")
         
         cmd.extend(["-i", input_path])
         
@@ -392,35 +393,35 @@ class FFmpegHandler:
         
         if video_info.get("is_10bit", False) and codec != "libx265":
             vf_filters.append("format=yuv420p")
-            print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
+            logging.debug(f"Adding 10-bit to 8-bit conversion filter")
         
         if codec == "libx264" and not use_hardware:
             vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
-            print(f"[DEBUG] Adding pad filter for H.264")
+            logging.debug(f"Adding pad filter for H.264")
         
         if vf_filters:
             cmd.extend(["-vf", ",".join(vf_filters)])
-            print(f"[DEBUG] Added video filters: {','.join(vf_filters)}")
+            logging.debug(f"Added video filters: {','.join(vf_filters)}")
         
         if codec == "libvpx-vp9":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "vp9_nvenc", "-crf", str(crf_value), "-b:v", "0"])
-                print(f"[DEBUG] Using VP9 hardware encoder")
+                logging.debug(f"Using VP9 hardware encoder")
             else:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
-                print(f"[DEBUG] Using VP9 software encoder")
+                logging.debug(f"Using VP9 software encoder")
             cmd.extend(["-c:a", "aac", "-b:a", "192k"]) # Изменено с 320k на 192k
-            print(f"[DEBUG] Converting audio to AAC 192k")
+            logging.debug(f"Converting audio to AAC 192k")
         elif codec == "libx265":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "hevc_nvenc", "-crf", str(crf_value), "-preset", "p6", "-tune", "ll"])
-                print(f"[DEBUG] Using HEVC hardware encoder with tune=ll")
+                logging.debug(f"Using HEVC hardware encoder with tune=ll")
             else:
                 cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
-                print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
+                logging.debug(f"Using HEVC software encoder with preset: {preset_value}")
             cmd.extend(["-c:a", "aac", "-b:a", "192k"]) # Изменено с 320k на 192k
-            print(f"[DEBUG] Converting audio to AAC 192k")
+            logging.debug(f"Converting audio to AAC 192k")
         else:  # libx264
             if use_hardware and has_nvenc:
                 cmd.extend([
@@ -433,38 +434,38 @@ class FFmpegHandler:
                     "-rc-lookahead", "20",
                     "-aq-strength", "15"
                 ])
-                print(f"[DEBUG] Using H.264 hardware encoder with tune=ll")
+                logging.debug(f"Using H.264 hardware encoder with tune=ll")
             else:
                 cmd.extend([
                     "-c:v", "libx264", 
                     "-crf", str(crf_value), 
                     "-preset", preset_value
                 ])
-                print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
+                logging.debug(f"Using H.264 software encoder with preset: {preset_value}")
             cmd.extend(["-c:a", "aac", "-b:a", "192k"]) # Изменено с 320k на 192k
-            print(f"[DEBUG] Converting audio to AAC 192k")
+            logging.debug(f"Converting audio to AAC 192k")
             
         # Добавляем субтитры, только если они есть
         if video_info and video_info.get("has_subtitles", False):
             if output_format == "mp4":
                 cmd.extend(["-c:s", "mov_text"])
-                print(f"[DEBUG] Using mov_text for subtitles")
+                logging.debug(f"Using mov_text for subtitles")
             else:
                 cmd.extend(["-c:s", "copy"])
-                print(f"[DEBUG] Copying subtitles as-is")
+                logging.debug(f"Copying subtitles as-is")
             
             cmd.extend(["-map", "0:V", "-map", "0:a", "-map", "0:s"])
-            print(f"[DEBUG] Mapping video, audio and subtitle streams (excluding cover art)")
+            logging.debug(f"Mapping video, audio and subtitle streams (excluding cover art)")
         else:
             cmd.extend(["-map", "0:V", "-map", "0:a"])
-            print(f"[DEBUG] Mapping video and audio streams only (no subtitles found)")
+            logging.debug(f"Mapping video and audio streams only (no subtitles found)")
         
         if output_format == "mp4":
             cmd.extend(["-movflags", "+faststart"])
-            print(f"[DEBUG] Added faststart flag for MP4")
+            logging.debug(f"Added faststart flag for MP4")
             
         cmd.extend(["-progress", "pipe:1", output_path])
-        print(f"[DEBUG] Final command: {' '.join(cmd)}")
+        logging.debug(f"Final command: {' '.join(cmd)}")
         
         return self._run_command_with_progress(cmd, progress_callback, duration_seconds, "Сжатие", process_setter)
     
@@ -472,13 +473,13 @@ class FFmpegHandler:
                                         preset_value: str, progress_callback: Optional[Callable], duration_seconds: float, 
                                         video_info: dict = None, use_hardware: bool = False,
                                         process_setter: Optional[Callable] = None) -> tuple[bool, str]:
-        print(f"[DEBUG] Starting compression without subtitles:")
-        print(f"[DEBUG]   Input: {input_path}")
-        print(f"[DEBUG]   Output: {output_path}")
-        print(f"[DEBUG]   Format: {output_format}")
-        print(f"[DEBUG]   Codec: {codec}")
-        print(f"[DEBUG]   CRF: {crf_value}")
-        print(f"[DEBUG]   Preset: {preset_value}")
+        logging.debug(f"Starting compression without subtitles:")
+        logging.debug(f"  Input: {input_path}")
+        logging.debug(f"  Output: {output_path}")
+        logging.debug(f"  Format: {output_format}")
+        logging.debug(f"  Codec: {codec}")
+        logging.debug(f"  CRF: {crf_value}")
+        logging.debug(f"  Preset: {preset_value}")
         
         if video_info is None:
             video_info = self.get_video_info(input_path)
@@ -487,14 +488,14 @@ class FFmpegHandler:
         
         gpu_info = self.get_gpu_info()
         has_nvenc = "NVIDIA NVENC" in gpu_info
-        print(f"[DEBUG] GPU info: {gpu_info}")
-        print(f"[DEBUG] Has NVENC: {has_nvenc}")
+        logging.debug(f"GPU info: {gpu_info}")
+        logging.debug(f"Has NVENC: {has_nvenc}")
         
         cmd = [self.ffmpeg_path, "-y"]
         
         if video_info.get("is_hevc", False) and has_nvenc:
             cmd.extend(["-hwaccel", "cuda"])
-            print(f"[DEBUG] Using CUDA hardware acceleration for HEVC decoding")
+            logging.debug(f"Using CUDA hardware acceleration for HEVC decoding")
         
         cmd.extend(["-i", input_path])
         
@@ -502,35 +503,35 @@ class FFmpegHandler:
         
         if video_info.get("is_10bit", False) and codec != "libx265":
             vf_filters.append("format=yuv420p")
-            print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
+            logging.debug(f"Adding 10-bit to 8-bit conversion filter")
         
         if codec == "libx264" and not use_hardware:
             vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
-            print(f"[DEBUG] Adding pad filter for H.264")
+            logging.debug(f"Adding pad filter for H.264")
         
         if vf_filters:
             cmd.extend(["-vf", ",".join(vf_filters)])
-            print(f"[DEBUG] Added video filters: {','.join(vf_filters)}")
+            logging.debug(f"Added video filters: {','.join(vf_filters)}")
         
         if codec == "libvpx-vp9":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "vp9_nvenc", "-crf", str(crf_value), "-b:v", "0"])
-                print(f"[DEBUG] Using VP9 hardware encoder")
+                logging.debug(f"Using VP9 hardware encoder")
             else:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
-                print(f"[DEBUG] Using VP9 software encoder")
+                logging.debug(f"Using VP9 software encoder")
             cmd.extend(["-c:a", "aac", "-b:a", "192k"]) # Изменено с 320k на 192k
-            print(f"[DEBUG] Converting audio to AAC 192k")
+            logging.debug(f"Converting audio to AAC 192k")
         elif codec == "libx265":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "hevc_nvenc", "-crf", str(crf_value), "-preset", "p6", "-tune", "ll"])
-                print(f"[DEBUG] Using HEVC hardware encoder with tune=ll")
+                logging.debug(f"Using HEVC hardware encoder with tune=ll")
             else:
                 cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
-                print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
+                logging.debug(f"Using HEVC software encoder with preset: {preset_value}")
             cmd.extend(["-c:a", "aac", "-b:a", "192k"]) # Изменено с 320k на 192k
-            print(f"[DEBUG] Converting audio to AAC 192k")
+            logging.debug(f"Converting audio to AAC 192k")
         else:  # libx264
             if use_hardware and has_nvenc:
                 cmd.extend([
@@ -543,26 +544,26 @@ class FFmpegHandler:
                     "-rc-lookahead", "20",
                     "-aq-strength", "15"
                 ])
-                print(f"[DEBUG] Using H.264 hardware encoder with tune=ll")
+                logging.debug(f"Using H.264 hardware encoder with tune=ll")
             else:
                 cmd.extend([
                     "-c:v", "libx264", 
                     "-crf", str(crf_value), 
                     "-preset", preset_value
                 ])
-                print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
+                logging.debug(f"Using H.264 software encoder with preset: {preset_value}")
             cmd.extend(["-c:a", "aac", "-b:a", "192k"]) # Изменено с 320k на 192k
-            print(f"[DEBUG] Converting audio to AAC 192k")
+            logging.debug(f"Converting audio to AAC 192k")
             
         cmd.extend(["-map", "0:V", "-map", "0:a"])
-        print(f"[DEBUG] Mapping video and audio streams only (excluding subtitles and cover art)")
+        logging.debug(f"Mapping video and audio streams only (excluding subtitles and cover art)")
         
         if output_format == "mp4":
             cmd.extend(["-movflags", "+faststart"])
-            print(f"[DEBUG] Added faststart flag for MP4")
+            logging.debug(f"Added faststart flag for MP4")
             
         cmd.extend(["-progress", "pipe:1", output_path])
-        print(f"[DEBUG] Final command: {' '.join(cmd)}")
+        logging.debug(f"Final command: {' '.join(cmd)}")
         
         return self._run_command_with_progress(cmd, progress_callback, duration_seconds, "Сжатие без субтитров", process_setter)
     
@@ -570,13 +571,13 @@ class FFmpegHandler:
                                      preset_value: str, progress_callback: Optional[Callable], duration_seconds: float, 
                                      video_info: dict = None, use_hardware: bool = False,
                                      process_setter: Optional[Callable] = None) -> tuple[bool, str]:
-        print(f"[DEBUG] Starting compression with full mapping but no data:")
-        print(f"[DEBUG]   Input: {input_path}")
-        print(f"[DEBUG]   Output: {output_path}")
-        print(f"[DEBUG]   Format: {output_format}")
-        print(f"[DEBUG]   Codec: {codec}")
-        print(f"[DEBUG]   CRF: {crf_value}")
-        print(f"[DEBUG]   Preset: {preset_value}")
+        logging.debug(f"Starting compression with full mapping but no data:")
+        logging.debug(f"  Input: {input_path}")
+        logging.debug(f"  Output: {output_path}")
+        logging.debug(f"  Format: {output_format}")
+        logging.debug(f"  Codec: {codec}")
+        logging.debug(f"  CRF: {crf_value}")
+        logging.debug(f"  Preset: {preset_value}")
         
         if video_info is None:
             video_info = self.get_video_info(input_path)
@@ -585,14 +586,14 @@ class FFmpegHandler:
         
         gpu_info = self.get_gpu_info()
         has_nvenc = "NVIDIA NVENC" in gpu_info
-        print(f"[DEBUG] GPU info: {gpu_info}")
-        print(f"[DEBUG] Has NVENC: {has_nvenc}")
+        logging.debug(f"GPU info: {gpu_info}")
+        logging.debug(f"Has NVENC: {has_nvenc}")
         
         cmd = [self.ffmpeg_path, "-y"]
         
         if video_info.get("is_hevc", False) and has_nvenc:
             cmd.extend(["-hwaccel", "cuda"])
-            print(f"[DEBUG] Using CUDA hardware acceleration for HEVC decoding")
+            logging.debug(f"Using CUDA hardware acceleration for HEVC decoding")
         
         cmd.extend(["-i", input_path])
         
@@ -600,35 +601,35 @@ class FFmpegHandler:
         
         if video_info.get("is_10bit", False) and codec != "libx265":
             vf_filters.append("format=yuv420p")
-            print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
+            logging.debug(f"Adding 10-bit to 8-bit conversion filter")
         
         if codec == "libx264" and not use_hardware:
             vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
-            print(f"[DEBUG] Adding pad filter for H.264")
+            logging.debug(f"Adding pad filter for H.264")
         
         if vf_filters:
             cmd.extend(["-vf", ",".join(vf_filters)])
-            print(f"[DEBUG] Added video filters: {','.join(vf_filters)}")
+            logging.debug(f"Added video filters: {','.join(vf_filters)}")
         
         if codec == "libvpx-vp9":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "vp9_nvenc", "-crf", str(crf_value), "-b:v", "0"])
-                print(f"[DEBUG] Using VP9 hardware encoder")
+                logging.debug(f"Using VP9 hardware encoder")
             else:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
-                print(f"[DEBUG] Using VP9 software encoder")
+                logging.debug(f"Using VP9 software encoder")
             cmd.extend(["-c:a", "aac", "-b:a", "192k"]) # Изменено с 320k на 192k
-            print(f"[DEBUG] Converting audio to AAC 192k")
+            logging.debug(f"Converting audio to AAC 192k")
         elif codec == "libx265":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "hevc_nvenc", "-crf", str(crf_value), "-preset", "p6", "-tune", "ll"])
-                print(f"[DEBUG] Using HEVC hardware encoder with tune=ll")
+                logging.debug(f"Using HEVC hardware encoder with tune=ll")
             else:
                 cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
-                print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
+                logging.debug(f"Using HEVC software encoder with preset: {preset_value}")
             cmd.extend(["-c:a", "aac", "-b:a", "192k"]) # Изменено с 320k на 192k
-            print(f"[DEBUG] Converting audio to AAC 192k")
+            logging.debug(f"Converting audio to AAC 192k")
         else:  # libx264
             if use_hardware and has_nvenc:
                 cmd.extend([
@@ -641,25 +642,25 @@ class FFmpegHandler:
                     "-rc-lookahead", "20",
                     "-aq-strength", "15"
                 ])
-                print(f"[DEBUG] Using H.264 hardware encoder with tune=ll")
+                logging.debug(f"Using H.264 hardware encoder with tune=ll")
             else:
                 cmd.extend([
                     "-c:v", "libx264", 
                     "-crf", str(crf_value), 
                     "-preset", preset_value
                 ])
-                print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
+                logging.debug(f"Using H.264 software encoder with preset: {preset_value}")
             cmd.extend(["-c:a", "aac", "-b:a", "192k"]) # Изменено с 320k на 192k
-            print(f"[DEBUG] Converting audio to AAC 192k")
+            logging.debug(f"Converting audio to AAC 192k")
             
         cmd.extend(["-map", "0", "-map", "-0:d"])
-        print(f"[DEBUG] Mapping all streams except data streams (cover art)")
+        logging.debug(f"Mapping all streams except data streams (cover art)")
         
         if output_format == "mp4":
             cmd.extend(["-movflags", "+faststart"])
-            print(f"[DEBUG] Added faststart flag for MP4")
+            logging.debug(f"Added faststart flag for MP4")
             
         cmd.extend(["-progress", "pipe:1", output_path])
-        print(f"[DEBUG] Final command: {' '.join(cmd)}")
+        logging.debug(f"Final command: {' '.join(cmd)}")
         
         return self._run_command_with_progress(cmd, progress_callback, duration_seconds, "Сжатие с полным маппингом", process_setter)
