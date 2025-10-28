@@ -110,13 +110,8 @@ class WorkerThread(QThread):
         if self.process:
             try:
                 self.process.terminate()
-                # Даем процессу время на завершение
                 self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                # Если процесс не завершился, принудительно убиваем
-                self.process.kill()
             except Exception:
-                # Игнорируем другие ошибки при остановке
                 pass
 
 
@@ -131,6 +126,12 @@ class MainWindow(QMainWindow):
         self.active_workers = []
         self._cached_info = None
         self.processing_stopped = False  # Флаг для остановки всей очереди
+        
+        # Переменные для отслеживания общего прогресса
+        self.batch_in_progress = False
+        self.total_files_in_batch = 0
+        self.completed_files_in_batch = 0
+        
         self.init_ui()
 
     def init_ui(self):
@@ -316,12 +317,10 @@ class MainWindow(QMainWindow):
         for url in urls:
             if url.isLocalFile():
                 self.add_file_to_queue(url.toLocalFile())
-        # Не запускаем обработку первого файла сразу, даем пользователю увидеть все файлы в очереди
         self.update_queue_label()
 
     def add_file_to_queue(self, file_path):
         if os.path.isfile(file_path):
-            # Получаем информацию о файле
             info = self.processor.get_video_info(file_path)
             if "error" not in info:
                 self.file_queue.append((file_path, info))
@@ -329,33 +328,26 @@ class MainWindow(QMainWindow):
                 self.update_queue_label()
                 print(f"Файл добавлен в очередь: {file_path}")
                 
-                # Если это первый файл и нет текущего файла, устанавливаем его как текущий
                 if len(self.file_queue) == 1 and self.current_file is None:
                     self.current_file, self.current_info = self.file_queue[0]
                     self.set_current_file(self.current_file, self.current_info)
 
     def update_queue_table(self):
-        print(f"Обновление таблицы, файлов в очереди: {len(self.file_queue)}")
         self.queue_table.setRowCount(len(self.file_queue))
         
-        # Получаем текущие настройки для расчета размера
         crf_value = self.crf_slider.value()
         codec = self.current_codec()
         use_hardware = self.hardware_radio.isChecked()
         force_vfr_fix = self.vfr_checkbox.isChecked()
         
         for row, (file_path, info) in enumerate(self.file_queue):
-            print(f"Добавление в таблицу: {os.path.basename(file_path)}")
-            # Имя файла
             file_name_item = QTableWidgetItem(os.path.basename(file_path))
             self.queue_table.setItem(row, 0, file_name_item)
             
-            # Размер файла
             size_mb = info.get("size_mb", 0)
             size_item = QTableWidgetItem(f"{size_mb:.1f} МБ")
             self.queue_table.setItem(row, 1, size_item)
             
-            # Статус VFR
             needs_vfr = info.get("needs_vfr_fix", False)
             vfr_text = "Требуется" if needs_vfr else "Не требуется"
             vfr_item = QTableWidgetItem(vfr_text)
@@ -365,7 +357,6 @@ class MainWindow(QMainWindow):
                 vfr_item.setForeground(Qt.GlobalColor.darkGreen)
             self.queue_table.setItem(row, 2, vfr_item)
             
-            # Примерный размер после сжатия с учетом текущих настроек
             est_size = self.processor.estimated_size_mb(
                 video_bitrate=info.get("video_bitrate", 0),
                 audio_bitrate=info.get("audio_bitrate", 128000),
@@ -375,11 +366,9 @@ class MainWindow(QMainWindow):
                 needs_vfr_fix=needs_vfr or force_vfr_fix,
                 use_hardware=use_hardware
             )
-            print(f"[DEBUG] Таблица: Расчетный размер для {os.path.basename(file_path)}: {est_size:.2f} МБ (CRF={crf_value})")
             est_item = QTableWidgetItem(f"{est_size:.1f} МБ")
             self.queue_table.setItem(row, 3, est_item)
         
-        # Принудительно обновляем отображение таблицы
         self.queue_table.viewport().update()
 
     def process_first_in_queue(self):
@@ -399,7 +388,6 @@ class MainWindow(QMainWindow):
         if files:
             for file in files:
                 self.add_file_to_queue(file)
-            # Не запускаем обработку первого файла сразу
 
     def set_current_file(self, file_path, file_info):
         self.file_label.setText(f"Текущий файл: {os.path.basename(file_path)}")
@@ -416,7 +404,6 @@ class MainWindow(QMainWindow):
         return self.preset_combo.currentData()
 
     def update_codec_options(self):
-        """Обновляет список доступных кодеков на основе выбранного формата."""
         self.codec_combo.clear()
         current_format = self.format_combo.currentData()
         compatible_codecs = OUTPUT_FORMATS[current_format]["compatible_codecs"]
@@ -425,65 +412,62 @@ class MainWindow(QMainWindow):
             codec_name = CODECS[codec_key]["name"]
             self.codec_combo.addItem(codec_name, codec_key)
         
-        # Устанавливаем кодек по умолчанию для текущего формата
         default_codec = OUTPUT_FORMATS[current_format]["default_codec"]
         index = self.codec_combo.findData(default_codec)
         if index >= 0:
             self.codec_combo.setCurrentIndex(index)
 
     def update_preset_options(self):
-        """Обновляет список доступных пресетов на основе выбранного кодека."""
         self.preset_combo.clear()
         codec_key = self.codec_combo.currentData()
+        
+        if codec_key is None:
+            return
+            
         presets = CODECS[codec_key]["presets"]
         default_preset = CODECS[codec_key]["preset_default"]
         
         for preset in presets:
             self.preset_combo.addItem(preset, preset)
         
-        # Устанавливаем пресет по умолчанию для текущего кодека
         index = self.preset_combo.findData(default_preset)
         if index >= 0:
             self.preset_combo.setCurrentIndex(index)
 
     def on_format_changed(self):
-        # Обновляем список доступных кодеков
         self.update_codec_options()
-        
-        # Обновляем список пресетов для нового кодека
         self.update_preset_options()
         
-        # Обновляем настройки CRF
         codec_key = self.codec_combo.currentData()
+        if codec_key is None:
+            return
+            
         codec_details = CODECS.get(codec_key, CODECS[DEFAULT_CODEC_KEY])
         self.crf_slider.setRange(codec_details["crf_min"], codec_details["crf_max"])
         self.crf_slider.setValue(codec_details["crf_default"])
         self.on_crf_changed(codec_details["crf_default"])
         self.update_estimated_size(self.crf_slider.value(), codec_key)
-        # Обновляем таблицу при изменении формата
         self.update_queue_table()
 
     def on_codec_changed(self):
-        # Обновляем список пресетов для нового кодека
+        codec_key = self.codec_combo.currentData()
+        if codec_key is None:
+            return
+            
         self.update_preset_options()
         
-        # Обновляем настройки CRF при изменении кодека
-        codec_key = self.codec_combo.currentData()
         codec_details = CODECS.get(codec_key, CODECS[DEFAULT_CODEC_KEY])
         self.crf_slider.setRange(codec_details["crf_min"], codec_details["crf_max"])
         self.crf_slider.setValue(codec_details["crf_default"])
         self.on_crf_changed(codec_details["crf_default"])
         self.update_estimated_size(self.crf_slider.value(), codec_key)
-        # Обновляем таблицу при изменении кодека
         self.update_queue_table()
 
     def on_preset_changed(self):
-        # Обновляем таблицу при изменении пресета
         self.update_queue_table()
 
     def on_encoding_changed(self):
         self.update_estimated_size(self.crf_slider.value(), self.current_codec())
-        # Обновляем таблицу при изменении типа кодирования
         self.update_queue_table()
 
     def on_crf_changed(self, value):
@@ -492,7 +476,6 @@ class MainWindow(QMainWindow):
         else:
             self.crf_label.setText(f"CRF: {value}")
         self.update_estimated_size(value, self.current_codec())
-        # Обновляем таблицу при изменении CRF
         self.update_queue_table()
 
     def update_estimated_size(self, crf, codec):
@@ -500,13 +483,11 @@ class MainWindow(QMainWindow):
             self.estimated_label.setText("Примерный размер после сжатия: —")
             return
         
-        # Используем кэшированную информацию
         info = self._cached_info if self._cached_info else None
         
         if info is None:
             return
 
-        # Используем новые поля video_bitrate и audio_bitrate
         est = self.processor.estimated_size_mb(
             video_bitrate=info.get("video_bitrate", 0),
             audio_bitrate=info.get("audio_bitrate", 128000),
@@ -516,7 +497,6 @@ class MainWindow(QMainWindow):
             needs_vfr_fix=info.get('needs_vfr_fix', False) or self.vfr_checkbox.isChecked(),
             use_hardware=self.hardware_radio.isChecked()
         )
-        print(f"[DEBUG] Текущий файл: Расчетный размер: {est:.2f} МБ (CRF={crf})")
 
         self.estimated_label.setText(f"Примерный размер после сжатия: {est:.1f} МБ")
 
@@ -543,7 +523,13 @@ class MainWindow(QMainWindow):
             self.log_text.append("Предупреждение: Сначала выберите файл")
             return
         
-        # Сбрасываем флаг остановки при начале новой обработки
+        # Инициализация пакета, если это первый файл
+        if not self.batch_in_progress:
+            self.batch_in_progress = True
+            self.total_files_in_batch = len(self.file_queue) + 1 # +1 для текущего файла
+            self.completed_files_in_batch = 0
+            print(f"Начало обработки пакета из {self.total_files_in_batch} файла(ов).")
+        
         self.processing_stopped = False
         
         params = {
@@ -559,7 +545,6 @@ class MainWindow(QMainWindow):
         self.run_compression_worker(**params)
 
     def cancel_processing(self):
-        # Показываем диалог подтверждения
         reply = QMessageBox.question(
             self, "Подтверждение отмены",
             "Вы уверены, что хотите отменить процесс сжатия и всю очередь?",
@@ -567,13 +552,11 @@ class MainWindow(QMainWindow):
         )
         
         if reply == QMessageBox.Yes:
-            # Устанавливаем флаг остановки всей очереди
             self.processing_stopped = True
             if self.compression_worker:
                 self.log_text.append("Отмена процесса сжатия и всей очереди...")
                 self.status_label.setText("Отмена процесса...")
                 self.compression_worker.stop()
-                # Небольшая задержка, чтобы процесс успел завершиться
                 QTimer.singleShot(1000, self.on_canceled)
 
     def on_canceled(self):
@@ -581,7 +564,11 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Отменено пользователем")
         self.progress_bar.setValue(0)
         
-        # Возвращаем интерфейс в исходное состояние
+        # Сброс состояния пакета
+        self.batch_in_progress = False
+        self.total_files_in_batch = 0
+        self.completed_files_in_batch = 0
+        
         self.current_file = None
         self.current_info = None
         self.set_ui_enabled(True)
@@ -619,17 +606,34 @@ class MainWindow(QMainWindow):
         self.compression_worker = None
 
     def update_progress(self, value, message):
-        self.progress_bar.setValue(value)
-        self.status_label.setText(message)
-        # Не добавляем сообщения о прогрессе в лог, только важные события
+        if self.batch_in_progress and self.total_files_in_batch > 0:
+            # Рассчитываем общий прогресс для всего пакета
+            current_file_progress = value / 100.0
+            total_progress_float = (self.completed_files_in_batch + current_file_progress) / self.total_files_in_batch
+            total_progress_percent = int(total_progress_float * 100)
+            
+            self.progress_bar.setValue(total_progress_percent)
+            
+            current_file_name = os.path.basename(self.current_file) if self.current_file else "неизвестный файл"
+            self.status_label.setText(f"Сжатие: {current_file_name} ({value}%) | Общий прогресс: {total_progress_percent}%")
+        else:
+            # Для одиночного файла или вне пакета
+            self.progress_bar.setValue(value)
+            self.status_label.setText(message)
+
+    def _handle_file_completion(self):
+        """Внутренний метод для обновления счетчика обработанных файлов."""
+        if self.batch_in_progress:
+            self.completed_files_in_batch += 1
+            print(f"Файл обработан. Прогресс по пакету: {self.completed_files_in_batch}/{self.total_files_in_batch}")
 
     def on_finished(self, result):
         self.log_text.append(f"Готово: {result}")
-        # Проверяем, не был ли процесс остановлен
+        self._handle_file_completion()
+        
         if not self.processing_stopped:
             self.process_next_file()
         else:
-            # Если процесс был остановлен, не продолжаем обработку очереди
             self.on_canceled()
 
     def on_error(self, error):
@@ -637,22 +641,19 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Ошибка при обработке!")
         if self.sender() == self.compression_worker:
             self.compression_worker = None
-        # Проверяем, не был ли процесс остановлен
+        self._handle_file_completion()
+
         if not self.processing_stopped:
             self.process_next_file()
         else:
-            # Если процесс был остановлен, не продолжаем обработку очереди
             self.on_canceled()
 
     def process_next_file(self):
-        # Проверяем, не был ли процесс остановлен
         if self.processing_stopped:
             self.on_canceled()
             return
             
-        # Удаляем обработанный файл из очереди
         if self.current_file:
-            # Ищем и удаляем текущий файл из очереди
             self.file_queue = [(path, info) for path, info in self.file_queue if path != self.current_file]
             self.update_queue_table()
         
@@ -662,6 +663,13 @@ class MainWindow(QMainWindow):
             self.set_current_file(self.current_file, self.current_info)
             QTimer.singleShot(500, self.start_processing)
         else:
+            # Пакет завершен
+            if self.batch_in_progress:
+                print("Обработка пакета завершена.")
+                self.batch_in_progress = False
+                self.total_files_in_batch = 0
+                self.completed_files_in_batch = 0
+
             self.current_file = None
             self.current_info = None
             self.set_ui_enabled(True)
@@ -707,6 +715,19 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    
+    # Проверка и вывод информации о среде выполнения
+    processor = VideoProcessor()
+    print("--- Информация о среде выполнения ---")
+    gpu_info = processor.get_gpu_info()
+    print(gpu_info)
+    if "Доступные GPU" in gpu_info:
+        print("-> Обнаружена поддержка аппаратного кодирования (GPU).")
+        print("-> В настройках программы можно выбрать тип кодирования: 'Аппаратное (NVENC)' или 'Программное (CPU)'.")
+    else:
+        print("-> Аппаратное кодирование не обнаружено. Сжатие будет выполняться на процессоре (CPU).")
+    print("------------------------------------\n")
+
     if not os.path.exists("ffmpeg.exe") or not os.path.exists("ffprobe.exe"):
         downloader = FFmpegDownloader()
         if not downloader.check_and_download():
