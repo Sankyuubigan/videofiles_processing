@@ -54,12 +54,13 @@ class MainWindow(QMainWindow):
         
         # Создаем таблицу для очереди файлов
         self.queue_table = QTableWidget()
-        self.queue_table.setColumnCount(4)
-        self.queue_table.setHorizontalHeaderLabels(["Имя файла", "Размер", "Статус VFR", "Примерный размер после сжатия"])
+        self.queue_table.setColumnCount(5) # Увеличено с 4 до 5
+        self.queue_table.setHorizontalHeaderLabels(["Имя файла", "Размер", "Статус VFR", "Сложность", "Примерный размер после сжатия"])
         self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.queue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.queue_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.queue_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.queue_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.queue_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.queue_table.setAlternatingRowColors(True)
@@ -223,7 +224,7 @@ class MainWindow(QMainWindow):
         process_layout.addLayout(buttons_layout)
         
         self.progress_bar = QProgressBar()
-        self.status_label = QLabel("Готов к работе")
+        self.status_label = QLabel("Грузен к работе")
         process_layout.addWidget(self.progress_bar)
         process_layout.addWidget(self.status_label)
         process_group.setLayout(process_layout)
@@ -260,13 +261,21 @@ class MainWindow(QMainWindow):
         if os.path.isfile(file_path):
             info = self.processor.get_video_info(file_path)
             if "error" not in info:
+                # Логируем сложность в консоль
+                complexity_score = info.get('complexity_score', 0)
+                complexity_desc = info.get('complexity_desc', 'Не определено')
+                print(f"--- Анализ файла: {os.path.basename(file_path)} ---")
+                print(f"Сложность: {complexity_desc} ({complexity_score}/10)")
+                print("------------------------------------")
+                
                 self.file_queue.append((file_path, info))
                 self.update_queue_table()
                 self.update_queue_label()
                 print(f"Файл добавлен в очередь: {file_path}")
                 
+                # Если это первый файл и нет текущего, устанавливаем его как текущий
                 if len(self.file_queue) == 1 and self.current_file is None:
-                    self.current_file, self.current_info = self.file_queue[0]
+                    self.current_file, self.current_info = self.file_queue.pop(0)
                     self.set_current_file(self.current_file, self.current_info)
 
     def update_queue_table(self):
@@ -276,6 +285,7 @@ class MainWindow(QMainWindow):
         codec = self.current_codec()
         use_hardware = self.hardware_radio.isChecked()
         force_vfr_fix = self.vfr_checkbox.isChecked()
+        preset = self.current_preset()
         
         for row, (file_path, info) in enumerate(self.file_queue):
             file_name_item = QTableWidgetItem(os.path.basename(file_path))
@@ -294,6 +304,12 @@ class MainWindow(QMainWindow):
                 vfr_item.setForeground(Qt.GlobalColor.darkGreen)
             self.queue_table.setItem(row, 2, vfr_item)
             
+            # Добавляем столбец со сложностью
+            complexity_desc = info.get('complexity_desc', 'Не определено')
+            complexity_item = QTableWidgetItem(complexity_desc)
+            self.queue_table.setItem(row, 3, complexity_item)
+            
+            complexity_score = info.get('complexity_score', 5)
             est_size = self.processor.estimated_size_mb(
                 video_bitrate=info.get("video_bitrate", 0),
                 audio_bitrate=info.get("audio_bitrate", 128000),
@@ -301,10 +317,14 @@ class MainWindow(QMainWindow):
                 crf=crf_value,
                 codec=codec,
                 needs_vfr_fix=needs_vfr or force_vfr_fix,
-                use_hardware=use_hardware
+                use_hardware=use_hardware,
+                preset=preset,
+                complexity_score=complexity_score,
+                width=info.get("width", 1920),
+                height=info.get("height", 1080)
             )
             est_item = QTableWidgetItem(f"{est_size:.1f} МБ")
-            self.queue_table.setItem(row, 3, est_item)
+            self.queue_table.setItem(row, 4, est_item)
         
         self.queue_table.viewport().update()
 
@@ -401,6 +421,7 @@ class MainWindow(QMainWindow):
         self.update_queue_table()
 
     def on_preset_changed(self):
+        self.update_estimated_size(self.crf_slider.value(), self.current_codec())
         self.update_queue_table()
 
     def on_encoding_changed(self):
@@ -425,6 +446,7 @@ class MainWindow(QMainWindow):
         if info is None:
             return
 
+        complexity_score = info.get('complexity_score', 5)
         est = self.processor.estimated_size_mb(
             video_bitrate=info.get("video_bitrate", 0),
             audio_bitrate=info.get("audio_bitrate", 128000),
@@ -432,7 +454,11 @@ class MainWindow(QMainWindow):
             crf=crf,
             codec=codec,
             needs_vfr_fix=info.get('needs_vfr_fix', False) or self.vfr_checkbox.isChecked(),
-            use_hardware=self.hardware_radio.isChecked()
+            use_hardware=self.hardware_radio.isChecked(),
+            preset=self.current_preset(),
+            complexity_score=complexity_score,
+            width=info.get("width", 1920),
+            height=info.get("height", 1080)
         )
 
         self.estimated_label.setText(f"Примерный размер после сжатия: {est:.1f} МБ")
@@ -463,7 +489,8 @@ class MainWindow(QMainWindow):
         # Инициализация пакета, если это первый файл
         if not self.batch_in_progress:
             self.batch_in_progress = True
-            self.total_files_in_batch = len(self.file_queue) + 1 # +1 для текущего файла
+            # Считаем общее количество файлов: текущий + те, что в очереди
+            self.total_files_in_batch = len(self.file_queue) + (1 if self.current_file else 0)
             self.completed_files_in_batch = 0
             print(f"Начало обработки пакета из {self.total_files_in_batch} файла(ов).")
         
@@ -511,7 +538,7 @@ class MainWindow(QMainWindow):
         self.current_info = None
         self.set_ui_enabled(True)
         self.file_label.setText("Перетащите файлы сюда или нажмите 'Выбрать'")
-        self.status_label.setText("Готов к работе")
+        self.status_label.setText("Гайден к работе")
         self.progress_bar.setValue(0)
         self.info_btn.setEnabled(False)
         self.process_btn.setEnabled(False)
@@ -592,15 +619,20 @@ class MainWindow(QMainWindow):
             return
             
         if self.current_file:
-            self.file_queue = [(path, info) for path, info in self.file_queue if path != self.current_file]
-            self.update_queue_table()
+            # Текущий файл уже был обработан, ищем следующий в очереди
+            if self.file_queue:
+                self.current_file, self.current_info = self.file_queue.pop(0)
+                self.set_current_file(self.current_file, self.current_info)
+                QTimer.singleShot(500, self.start_processing)
+            else:
+                # Очередь пуста
+                self.current_file = None
+                self.current_info = None
         
+        self.update_queue_table()
         self.update_queue_label()
-        if self.file_queue:
-            self.current_file, self.current_info = self.file_queue[0]
-            self.set_current_file(self.current_file, self.current_info)
-            QTimer.singleShot(500, self.start_processing)
-        else:
+        
+        if not self.current_file:
             # Пакет завершен
             if self.batch_in_progress:
                 print("Обработка пакета завершена.")
@@ -608,8 +640,6 @@ class MainWindow(QMainWindow):
                 self.total_files_in_batch = 0
                 self.completed_files_in_batch = 0
 
-            self.current_file = None
-            self.current_info = None
             self.set_ui_enabled(True)
             self.file_label.setText("Перетащите файлы сюда или нажмите 'Выбрать'")
             self.status_label.setText("Готов к работе")
@@ -662,7 +692,7 @@ def main():
     print(gpu_info)
     if "Доступные GPU" in gpu_info:
         print("-> Обнаружена поддержка аппаратного кодирования (GPU).")
-        print("-> В настройках программы можно выбрать тип кодирования: 'Аппаратное (NVENC)' или 'Программное (CPU)'.")
+        print("-> В настройках программы можно выбрать тип кодирования: 'Ащапаратное (NVENC)' или 'Программное (CPU)'.")
     else:
         print("-> Аппаратное кодирование не обнаружено. Сжатие будет выполняться на процессоре (CPU).")
     print("------------------------------------\n")

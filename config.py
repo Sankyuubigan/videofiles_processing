@@ -33,7 +33,7 @@ DEFAULT_USE_HARDWARE_ENCODING = False
 H264_PRESETS = ["veryslow", "slower", "slow", "medium", "fast", "faster", "veryfast", "superfast", "ultrafast"]
 H265_PRESETS = ["veryslow", "slower", "slow", "medium", "fast", "faster", "veryfast", "superfast", "ultrafast"]
 VP9_PRESETS = ["veryslow", "slower", "slow", "medium", "fast", "faster", "veryfast", "superfast", "ultrafast"]
-DEFAULT_H264_PRESET = "veryslow"
+DEFAULT_H264_PRESET = "slow"  # Изменено с "veryslow" на "slow"
 DEFAULT_H265_PRESET = "slow"
 DEFAULT_VP9_PRESET = "slow"
 
@@ -58,6 +58,43 @@ VP9_CRF_FACTOR = {
     47: 0.07, 48: 0.06, 49: 0.05, 50: 0.04
 }
 
+# Поправочные коэффициенты для пресетов (чем медленнее пресет, тем лучше сжатие)
+H264_PRESET_FACTOR = {
+    "veryslow": 0.85,  # Наилучшее сжатие
+    "slower": 0.88,
+    "slow": 0.92,       # Хороший баланс между скоростью и качеством
+    "medium": 1.0,      # Базовый пресет
+    "fast": 1.1,
+    "faster": 1.2,
+    "veryfast": 1.3,
+    "superfast": 1.4,
+    "ultrafast": 1.5    # Наихудшее сжатие
+}
+
+H265_PRESET_FACTOR = {
+    "veryslow": 0.85,
+    "slower": 0.88,
+    "slow": 0.92,
+    "medium": 1.0,
+    "fast": 1.1,
+    "faster": 1.2,
+    "veryfast": 1.3,
+    "superfast": 1.4,
+    "ultrafast": 1.5
+}
+
+VP9_PRESET_FACTOR = {
+    "veryslow": 0.85,
+    "slower": 0.88,
+    "slow": 0.92,
+    "medium": 1.0,
+    "fast": 1.1,
+    "faster": 1.2,
+    "veryfast": 1.3,
+    "superfast": 1.4,
+    "ultrafast": 1.5
+}
+
 # Определяем доступные кодеки и их параметры
 CODECS = {
     "libx264": {
@@ -67,7 +104,8 @@ CODECS = {
         "crf_default": DEFAULT_CRF_H264,
         "presets": H264_PRESETS,
         "preset_default": DEFAULT_H264_PRESET,
-        "factor": H264_CRF_FACTOR
+        "factor": H264_CRF_FACTOR,
+        "preset_factor": H264_PRESET_FACTOR
     },
     "libx265": {
         "name": "H.265 (HEVC)",
@@ -76,7 +114,8 @@ CODECS = {
         "crf_default": DEFAULT_CRF_H265,
         "presets": H265_PRESETS,
         "preset_default": DEFAULT_H265_PRESET,
-        "factor": H265_CRF_FACTOR
+        "factor": H265_CRF_FACTOR,
+        "preset_factor": H265_PRESET_FACTOR
     },
     "libvpx-vp9": {
         "name": "VP9",
@@ -85,7 +124,8 @@ CODECS = {
         "crf_default": DEFAULT_CRF_VP9,
         "presets": VP9_PRESETS,
         "preset_default": DEFAULT_VP9_PRESET,
-        "factor": VP9_CRF_FACTOR
+        "factor": VP9_CRF_FACTOR,
+        "preset_factor": VP9_PRESET_FACTOR
     }
 }
 DEFAULT_CODEC_KEY = "libx264"

@@ -8,7 +8,7 @@ class VideoInfoDialog(QDialog):
         self.video_info = video_info
         self.setWindowTitle("Информация о видео")
         self.setModal(True)
-        self.resize(500, 400)
+        self.resize(550, 450)
         self.setup_ui()
 
     def setup_ui(self):
@@ -34,6 +34,10 @@ class VideoInfoDialog(QDialog):
         
         needs_vfr_text = "Да" if self.video_info.get('needs_vfr_fix') else "Нет"
         
+        # Получаем оценку сложности
+        complexity_score = self.video_info.get('complexity_score', 0)
+        complexity_desc = self.video_info.get('complexity_desc', 'Не определено')
+        
         info_html = f"""
         <b>Путь:</b> {self.video_info.get('path', 'N/A')}<br>
         <b>Размер:</b> {self.video_info.get('size_mb', 0):.2f} МБ<br>
@@ -44,6 +48,7 @@ class VideoInfoDialog(QDialog):
         <b>Битрейт аудио:</b> {self.video_info.get('audio_bitrate', 0) // 1000} кбит/с<br>
         <b>Требуется VFR fix:</b> {needs_vfr_text}<br>
         <b>Примерный размер после сжатия:</b> {self.video_info.get('estimated_size_mb', 0):.2f} МБ<br>
+        <b>Оценка сложности:</b> {complexity_desc} ({complexity_score}/10)<br>
         {audio_info}
         <b>GPU:</b> {self.video_info.get('gpu_info', 'N/A')}<br>
         <b>Режим обработки:</b> {self.video_info.get('processing_mode', 'N/A')}
