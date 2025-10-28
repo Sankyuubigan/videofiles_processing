@@ -8,8 +8,9 @@ from config import (OUTPUT_FORMATS, CODECS, TEMP_FIXED_VIDEO_SUFFIX,
 COMPRESSED_VIDEO_SUFFIX, FFMPEG_PATH, FFPROBE_PATH,
 DEFAULT_FPS_FIX, DEFAULT_FIX_CRF_H264, DEFAULT_FIX_CRF_H265, DEFAULT_FIX_CRF_VP9)
 
+
 class VideoProcessor:
-    def __init__(self):  # Исправлено: __init__ вместо init
+    def __init__(self):
         self.ffmpeg_path = FFMPEG_PATH
         self.ffprobe_path = FFPROBE_PATH
 
@@ -55,7 +56,6 @@ class VideoProcessor:
             startupinfo=startupinfo
         )
         
-        # Передаем процесс в WorkerThread для возможности остановки
         if process_setter:
             process_setter(process)
         
@@ -63,18 +63,14 @@ class VideoProcessor:
         error_lines = []
         for line_bytes in iter(process.stdout.readline, b''):
             try:
-                # Декодируем строку с обработкой ошибок
                 line = line_bytes.decode('utf-8', errors='replace')
             except UnicodeDecodeError:
-                # Если UTF-8 не сработал, пробуем другие кодировки
                 try:
                     line = line_bytes.decode('cp1251', errors='replace')
                 except UnicodeDecodeError:
-                    # Если и cp1251 не сработал, используем замену нераспознанных символов
                     line = line_bytes.decode('ascii', errors='replace')
             
             output_log.append(line)
-            # Сохраняем строки с ошибками для детального анализа
             if any(keyword in line.lower() for keyword in ['error', 'failed', 'invalid', 'cannot', 'unable']):
                 error_lines.append(line.strip())
             if progress_callback and duration_seconds:
@@ -85,7 +81,6 @@ class VideoProcessor:
         return_code = process.wait()
         full_output_message = "".join(output_log)
         
-        # Детальное логирование при ошибке
         if return_code != 0:
             print(f"[ERROR] FFmpeg failed with return code: {return_code}")
             print(f"[ERROR] Command: {' '.join(cmd)}")
@@ -93,7 +88,6 @@ class VideoProcessor:
             for error_line in error_lines:
                 print(f"[ERROR] {error_line}")
             
-            # Дополнительная информация о контейнере и потоках
             if len(cmd) > 3 and cmd[1] == "-i":
                 input_file = cmd[2]
                 print(f"[ERROR] Detailed info about input file:")
@@ -137,10 +131,8 @@ class VideoProcessor:
     def get_audio_tracks(self, input_path: str) -> List[Dict]:
         cmd = [self.ffprobe_path, "-v", "quiet", "-print_format", "json", "-show_streams", input_path]
         try:
-            # Запускаем процесс без автоматического декодирования вывода
             result = subprocess.run(cmd, capture_output=True, timeout=30, startupinfo=self._get_platform_specific_startupinfo())
             if result.returncode == 0:
-                # Декодируем вывод вручную с обработкой ошибок
                 try:
                     output_text = result.stdout.decode('utf-8', errors='replace')
                 except UnicodeDecodeError:
@@ -167,23 +159,19 @@ class VideoProcessor:
             return []
 
     def estimated_size_mb(self, video_bitrate: int, audio_bitrate: int, duration: float, crf: int, codec: str, needs_vfr_fix: bool = False, use_hardware: bool = False) -> float:
-        """
-        Рассчитывает примерный размер сжатого файла.
-        Использует битрейт видеопотока из ffprobe для более точной базы.
-        """
         if video_bitrate <= 0 or duration <= 0:
             print(f"[DEBUG] estimated_size_mb: Invalid input. video_bitrate={video_bitrate}, duration={duration}")
             return 0.0
-        # Базовый размер на основе битрейта видео и аудио
+        
         total_bitrate = video_bitrate + audio_bitrate
         base = (total_bitrate * duration) / 8 / (1024 * 1024)
         print(f"[DEBUG] estimated_size_mb: Video bitrate={video_bitrate} bit/s, Audio bitrate={audio_bitrate} bit/s, Total bitrate={total_bitrate} bit/s")
         print(f"[DEBUG] estimated_size_mb: Base size (MB): {base:.2f}")
-        # Рассчитываем коэффициент сжатия для целевого CRF
+        
         target_factor = self._calculate_compression_factor(crf, codec, use_hardware)
         print(f"[DEBUG] estimated_size_mb: Target CRF={crf}, Target factor={target_factor:.4f}")
+        
         if needs_vfr_fix:
-            # Для VFR-fix: предполагаем минимальные потери при конвертации в CFR
             fix_crf = 15 if codec == "libvpx-vp9" else (20 if codec == "libx265" else 18)
             fix_factor = self._calculate_compression_factor(fix_crf, codec, use_hardware)
             print(f"[DEBUG] estimated_size_mb: VFR-fix needed. Fix CRF={fix_crf}, Fix factor={fix_factor:.4f}")
@@ -195,12 +183,8 @@ class VideoProcessor:
         return max(0.1, estimated_size)
 
     def _calculate_compression_factor(self, crf: int, codec: str, use_hardware: bool = False) -> float:
-        """
-        Рассчитывает коэффициент сжатия на основе CRF и кодека.
-        """
         codec_info = CODECS.get(codec, None)
         if not codec_info:
-            # Если кодек не найден, используем стандартные значения для H.264
             min_crf = 18
             max_crf = 35
             if crf <= min_crf:
@@ -213,19 +197,16 @@ class VideoProcessor:
                 factor = 1.0 * (0.3 / 1.0) ** (crf_diff / max_diff)
                 return max(0.3, factor)
         
-        # Используем фактор из словаря CODECS, если он доступен
         factor_dict = codec_info.get("factor", None)
         if factor_dict and crf in factor_dict:
             return factor_dict[crf]
         
-        # Если фактор не найден в словаре, рассчитываем его
         min_crf = codec_info["crf_min"]
         max_crf = codec_info["crf_max"]
         
         if crf <= min_crf:
             return 1.0
         elif crf >= max_crf:
-            # Разные минимальные факторы для разных кодеков
             if codec == "libx264":
                 return 0.3
             elif codec == "libx265":
@@ -238,7 +219,6 @@ class VideoProcessor:
             crf_diff = crf - min_crf
             max_diff = max_crf - min_crf
             
-            # Разные минимальные факторы для разных кодеков
             if codec == "libx264":
                 min_factor = 0.3
             elif codec == "libx265":
@@ -255,10 +235,8 @@ class VideoProcessor:
         print(f"[DEBUG] Getting video info for: {input_path}")
         cmd = [self.ffprobe_path, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", input_path]
         try:
-            # Запускаем процесс без автоматического декодирования вывода
             result = subprocess.run(cmd, capture_output=True, timeout=30, startupinfo=self._get_platform_specific_startupinfo())
             if result.returncode != 0: 
-                # Декодируем stderr вручную с обработкой ошибок
                 try:
                     stderr_text = result.stderr.decode('utf-8', errors='replace')
                 except UnicodeDecodeError:
@@ -270,7 +248,6 @@ class VideoProcessor:
                 print(f"[ERROR] FFprobe failed with code {result.returncode}: {stderr_text}")
                 return {"error": f"Ошибка ffprobe: {stderr_text}"}
             
-            # Декодируем stdout вручную с обработкой ошибок
             try:
                 output_text = result.stdout.decode('utf-8', errors='replace')
             except UnicodeDecodeError:
@@ -288,7 +265,6 @@ class VideoProcessor:
             format_info = data.get("format", {})
             duration = float(format_info.get("duration", 0))
             
-            # Получаем точный размер файла напрямую из файловой системы
             try:
                 size_bytes = os.path.getsize(input_path)
                 print(f"[DEBUG] get_video_info: Actual file size from filesystem: {size_bytes} bytes")
@@ -299,26 +275,22 @@ class VideoProcessor:
             size_mb = size_bytes / (1024 * 1024)
             print(f"[DEBUG] get_video_info: File size in MB: {size_mb:.2f} MB")
             
-            # Получаем битрейт из формата, если он доступен
             total_bitrate = int(format_info.get("bit_rate", 0))
-            # Если битрейт в формате не указан, рассчитываем его вручную
             if total_bitrate == 0 and duration > 0:
                 total_bitrate = int((size_bytes * 8) / duration)
-            # Получаем битрейт из видеопотока, если он доступен
             video_bitrate = int(video_stream.get("bit_rate", 0))
-            # Если битрейт видео не указан, рассчитываем его
             if video_bitrate == 0:
-                # Получаем все аудио потоки и их битрейты
                 audio_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
                 audio_bitrate = sum(int(s.get("bit_rate", 128000)) for s in audio_streams) if audio_streams else 128000
-                # Рассчитываем битрейт видео, вычитая аудио битрейт из общего
                 video_bitrate = max(0, total_bitrate - audio_bitrate)
                 print(f"[DEBUG] get_video_info: Used fallback for video_bitrate. Calculated: {video_bitrate} bit/s")
-            # Получаем аудио-битрейт для оценки
             audio_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
             audio_bitrate = sum(int(s.get("bit_rate", 128000)) for s in audio_streams) if audio_streams else 128000
             
-            # Выводим детальную информацию о потоках для диагностики
+            # Проверяем наличие субтитров
+            subtitle_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "subtitle"]
+            has_subtitles = len(subtitle_streams) > 0
+            
             print(f"[DEBUG] Video stream info:")
             print(f"[DEBUG]   Codec: {video_stream.get('codec_name', 'unknown')}")
             print(f"[DEBUG]   Resolution: {video_stream.get('width', 0)}x{video_stream.get('height', 0)}")
@@ -334,18 +306,16 @@ class VideoProcessor:
                 print(f"[DEBUG]     Channels: {stream.get('channels', 0)}")
                 print(f"[DEBUG]     Bitrate: {stream.get('bit_rate', 'unknown')}")
             
+            print(f"[DEBUG] Subtitle streams info: {len(subtitle_streams)} found")
+            
             fps_str = video_stream.get("avg_frame_rate", "0/1")
             num, den = map(int, fps_str.split('/'))
             fps = num / den if den != 0 else 0
             needs_vfr_fix = video_stream.get("r_frame_rate") in ["1000/1", "0/0"] or fps_str == "0/0"
             gpu_info = self.get_gpu_info()
-            # Рассчитываем оценку, используя новый метод
             est_size = self.estimated_size_mb(video_bitrate, audio_bitrate, duration, 24, "libx264", needs_vfr_fix, False)
             
-            # Проверяем, является ли видео HEVC
             is_hevc = video_stream.get("codec_name", "").lower() in ["hevc", "h265"]
-            
-            # Проверяем, является ли видео 10-битным
             is_10bit = video_stream.get("pix_fmt", "").endswith("10le") or video_stream.get("pix_fmt", "").endswith("10be")
             
             return {
@@ -366,6 +336,7 @@ class VideoProcessor:
                 "is_10bit": is_10bit,
                 "video_codec": video_stream.get("codec_name", "unknown"),
                 "pixel_format": video_stream.get("pix_fmt", "unknown"),
+                "has_subtitles": has_subtitles
             }
         except Exception as e:
             print(f"[ERROR] Exception in get_video_info: {str(e)}")
@@ -374,7 +345,8 @@ class VideoProcessor:
     def compress_video(self, input_path: str, output_format: str, codec: str, crf_value: int,
                     preset_value: str, force_vfr_fix: bool, use_hardware: bool = False, 
                     progress_callback: Optional[Callable] = None,
-                    process_setter: Optional[Callable] = None) -> str:
+                    process_setter: Optional[Callable] = None,
+                    output_dir: Optional[str] = None) -> str:
         print(f"[DEBUG] Starting compression:")
         print(f"[DEBUG]   Input: {input_path}")
         print(f"[DEBUG]   Output format: {output_format}")
@@ -397,15 +369,18 @@ class VideoProcessor:
             raise Exception("Некорректная длительность видео")
         
         needs_fix = force_vfr_fix or video_info["needs_vfr_fix"]
-        # Формируем имя выходного файла
-        output_file = input_p.with_name(f"{input_p.stem}{COMPRESSED_VIDEO_SUFFIX}.{output_format}")
-        print(f"[DEBUG] Output file will be: {output_file}")
         
-        # Проверяем, существует ли файл, и если да - удаляем его
-        if output_file.exists():
+        if output_dir:
+            output_path = Path(output_dir) / f"{input_p.stem}{COMPRESSED_VIDEO_SUFFIX}.{output_format}"
+        else:
+            output_path = input_p.with_name(f"{input_p.stem}{COMPRESSED_VIDEO_SUFFIX}.{output_format}")
+        
+        print(f"[DEBUG] Output file will be: {output_path}")
+        
+        if output_path.exists():
             try:
-                output_file.unlink()
-                print(f"[DEBUG] Deleted existing file: {output_file}")
+                output_path.unlink()
+                print(f"[DEBUG] Deleted existing file: {output_path}")
             except Exception as e:
                 print(f"[ERROR] Error deleting existing file: {e}")
         
@@ -414,33 +389,31 @@ class VideoProcessor:
             if needs_fix:
                 print(f"[DEBUG] VFR fix is needed")
                 def vfr_progress(p, m): 
-                    progress_callback(10 + int(p * 0.4), m) if progress_callback else None
-                success, msg = self.fix_vfr_target_crf(current_input, str(output_file), output_format, codec, crf_value, preset_value, vfr_progress, duration, use_hardware, video_info, process_setter)
+                    progress_callback(p, m) if progress_callback else None
+                success, msg = self.fix_vfr_target_crf(current_input, str(output_path), output_format, codec, crf_value, preset_value, vfr_progress, duration, use_hardware, video_info, process_setter)
                 if not success: 
                     print(f"[ERROR] VFR fix failed: {msg}")
                     raise Exception(f"Ошибка VFR-fix: {msg}")
-                current_input = str(output_file)
+                current_input = str(output_path)
             else:
                 print(f"[DEBUG] No VFR fix needed, proceeding with compression")
                 def compress_progress(p, m): 
-                    progress_callback(50 + int(p * 0.45), m) if progress_callback else None
-                success, msg = self.compress_video_core(current_input, str(output_file), output_format, codec, crf_value, preset_value, compress_progress, duration, video_info, use_hardware, process_setter)
+                    progress_callback(p, m) if progress_callback else None
+                success, msg = self.compress_video_core(current_input, str(output_path), output_format, codec, crf_value, preset_value, compress_progress, duration, video_info, use_hardware, process_setter)
                 if not success: 
                     print(f"[ERROR] Compression failed: {msg}")
-                    # Пробуем альтернативный метод без субтитров
                     print(f"[DEBUG] Trying alternative method without subtitles...")
-                    success, msg = self.compress_video_core_no_subtitles(current_input, str(output_file), output_format, codec, crf_value, preset_value, compress_progress, duration, video_info, use_hardware, process_setter)
+                    success, msg = self.compress_video_core_no_subtitles(current_input, str(output_path), output_format, codec, crf_value, preset_value, compress_progress, duration, video_info, use_hardware, process_setter)
                     if not success:
                         print(f"[ERROR] Alternative method failed: {msg}")
-                        # Пробуем последний метод с полным маппингом, но без данных
                         print(f"[DEBUG] Trying last method with full mapping but no data...")
-                        success, msg = self.compress_video_core_full_map(current_input, str(output_file), output_format, codec, crf_value, preset_value, compress_progress, duration, video_info, use_hardware, process_setter)
+                        success, msg = self.compress_video_core_full_map(current_input, str(output_path), output_format, codec, crf_value, preset_value, compress_progress, duration, video_info, use_hardware, process_setter)
                         if not success:
                             print(f"[ERROR] All methods failed: {msg}")
                             raise Exception(f"Ошибка сжатия: {msg}")
             if progress_callback: progress_callback(100, "Готово!")
             print(f"[DEBUG] Compression completed successfully")
-            return str(output_file)
+            return str(output_path)
         except Exception as e:
             print(f"[ERROR] Exception during compression: {str(e)}")
             raise e
@@ -463,22 +436,17 @@ class VideoProcessor:
         print(f"[DEBUG] GPU info: {gpu_info}")
         print(f"[DEBUG] Has NVENC: {has_nvenc}")
         
-        # Формируем базовую команду FFmpeg
         cmd = [self.ffmpeg_path, "-y"]
         
-        # Добавляем аппаратное ускорение декодирования ДО указания входного файла
         if video_info and video_info.get("is_hevc", False) and has_nvenc:
             cmd.extend(["-hwaccel", "cuda"])
             print(f"[DEBUG] Using CUDA hardware acceleration for HEVC decoding")
         
-        # Теперь добавляем входной файл
         cmd.extend(["-i", input_path])
         
-        # Добавляем фильтр для исправления VFR и преобразования формата пикселей при необходимости
         vf_filters = []
         vf_filters.append(f"fps={DEFAULT_FPS_FIX}")
         
-        # Если исходное видео 10-битное, а кодек не поддерживает 10 бит, добавляем преобразование
         if video_info and video_info.get("is_10bit", False) and codec != "libx265":
             vf_filters.append("format=yuv420p")
             print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
@@ -487,7 +455,6 @@ class VideoProcessor:
             cmd.extend(["-vf", ",".join(vf_filters)])
             print(f"[DEBUG] Added video filters: {','.join(vf_filters)}")
         
-        # Настраиваем кодеки в зависимости от выбранного кодека и наличия GPU
         if codec == "libvpx-vp9":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "vp9_nvenc", "-crf", str(crf_value), "-b:v", "0"])
@@ -496,7 +463,7 @@ class VideoProcessor:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
                 print(f"[DEBUG] Using VP9 software encoder")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
+            cmd.extend(["-c:a", "copy"])
             print(f"[DEBUG] Copying audio streams as-is")
         elif codec == "libx265":
             if use_hardware and has_nvenc:
@@ -505,7 +472,7 @@ class VideoProcessor:
             else:
                 cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
                 print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
+            cmd.extend(["-c:a", "copy"])
             print(f"[DEBUG] Copying audio streams as-is")
         else:  # libx264
             if use_hardware and has_nvenc:
@@ -514,22 +481,24 @@ class VideoProcessor:
             else:
                 cmd.extend(["-c:v", "libx264", "-crf", str(crf_value), "-preset", preset_value])
                 print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
-            cmd.extend(["-c:a", "copy"])  # Копируем аудио без конвертации
+            cmd.extend(["-c:a", "copy"])
             print(f"[DEBUG] Copying audio streams as-is")
         
-        # Для MP4 добавляем обработку субтитров
-        if output_format == "mp4":
-            cmd.extend(["-c:s", "mov_text"])
-            print(f"[DEBUG] Using mov_text for subtitles")
-        else:
-            cmd.extend(["-c:s", "copy"])  # Для других форматов копируем субтитры как есть
-            print(f"[DEBUG] Copying subtitles as-is")
+        # Добавляем субтитры, только если они есть
+        if video_info and video_info.get("has_subtitles", False):
+            if output_format == "mp4":
+                cmd.extend(["-c:s", "mov_text"])
+                print(f"[DEBUG] Using mov_text for subtitles")
+            else:
+                cmd.extend(["-c:s", "copy"])
+                print(f"[DEBUG] Copying subtitles as-is")
             
-        # Добавляем map для видеопотоков, аудиопотоков и субтитров, исключая обложку
-        cmd.extend(["-map", "0:V", "-map", "0:a", "-map", "0:s"])
-        print(f"[DEBUG] Mapping video, audio and subtitle streams (excluding cover art)")
+            cmd.extend(["-map", "0:V", "-map", "0:a", "-map", "0:s"])
+            print(f"[DEBUG] Mapping video, audio and subtitle streams (excluding cover art)")
+        else:
+            cmd.extend(["-map", "0:V", "-map", "0:a"])
+            print(f"[DEBUG] Mapping video and audio streams only (no subtitles found)")
         
-        # Для MP4 добавляем флаг быстрого старта
         if output_format == "mp4":
             cmd.extend(["-movflags", "+faststart"])
             print(f"[DEBUG] Added faststart flag for MP4")
@@ -551,7 +520,6 @@ class VideoProcessor:
         print(f"[DEBUG]   CRF: {crf_value}")
         print(f"[DEBUG]   Preset: {preset_value}")
         
-        # Получаем информацию о битрейте, если она не была передана
         if video_info is None:
             video_info = self.get_video_info(input_path)
             if "error" in video_info:
@@ -562,26 +530,20 @@ class VideoProcessor:
         print(f"[DEBUG] GPU info: {gpu_info}")
         print(f"[DEBUG] Has NVENC: {has_nvenc}")
         
-        # Формируем базовую команду FFmpeg
         cmd = [self.ffmpeg_path, "-y"]
         
-        # Добавляем аппаратное ускорение декодирования ДО указания входного файла
         if video_info.get("is_hevc", False) and has_nvenc:
             cmd.extend(["-hwaccel", "cuda"])
             print(f"[DEBUG] Using CUDA hardware acceleration for HEVC decoding")
         
-        # Теперь добавляем входной файл
         cmd.extend(["-i", input_path])
         
-        # Добавляем фильтры при необходимости
         vf_filters = []
         
-        # Если исходное видео 10-битное, а кодек не поддерживает 10 бит, добавляем преобразование
         if video_info.get("is_10bit", False) and codec != "libx265":
             vf_filters.append("format=yuv420p")
             print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
         
-        # Для H.264 добавляем фильтр выравнивания размеров, используя pad как в bat-файле
         if codec == "libx264" and not use_hardware:
             vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
             print(f"[DEBUG] Adding pad filter for H.264")
@@ -590,7 +552,6 @@ class VideoProcessor:
             cmd.extend(["-vf", ",".join(vf_filters)])
             print(f"[DEBUG] Added video filters: {','.join(vf_filters)}")
         
-        # Настраиваем кодеки в зависимости от выбранного кодека и наличия GPU
         if codec == "libvpx-vp9":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "vp9_nvenc", "-crf", str(crf_value), "-b:v", "0"])
@@ -599,7 +560,6 @@ class VideoProcessor:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
                 print(f"[DEBUG] Using VP9 software encoder")
-            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
             cmd.extend(["-c:a", "aac", "-b:a", "320k"])
             print(f"[DEBUG] Converting audio to AAC 320k")
         elif codec == "libx265":
@@ -609,7 +569,6 @@ class VideoProcessor:
             else:
                 cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
                 print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
-            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
             cmd.extend(["-c:a", "aac", "-b:a", "320k"])
             print(f"[DEBUG] Converting audio to AAC 320k")
         else:  # libx264
@@ -626,30 +585,30 @@ class VideoProcessor:
                 ])
                 print(f"[DEBUG] Using H.264 hardware encoder")
             else:
-                # Используем выбранный пресет
                 cmd.extend([
                     "-c:v", "libx264", 
                     "-crf", str(crf_value), 
                     "-preset", preset_value
                 ])
                 print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
-            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
             cmd.extend(["-c:a", "aac", "-b:a", "320k"])
             print(f"[DEBUG] Converting audio to AAC 320k")
             
-        # Для MP4 добавляем обработку субтитров
-        if output_format == "mp4":
-            cmd.extend(["-c:s", "mov_text"])
-            print(f"[DEBUG] Using mov_text for subtitles")
-        else:
-            cmd.extend(["-c:s", "copy"])  # Для других форматов копируем субтитры как есть
-            print(f"[DEBUG] Copying subtitles as-is")
+        # Добавляем субтитры, только если они есть
+        if video_info and video_info.get("has_subtitles", False):
+            if output_format == "mp4":
+                cmd.extend(["-c:s", "mov_text"])
+                print(f"[DEBUG] Using mov_text for subtitles")
+            else:
+                cmd.extend(["-c:s", "copy"])
+                print(f"[DEBUG] Copying subtitles as-is")
             
-        # Добавляем map для видеопотоков, аудиопотоков и субтитров, исключая обложку
-        cmd.extend(["-map", "0:V", "-map", "0:a", "-map", "0:s"])
-        print(f"[DEBUG] Mapping video, audio and subtitle streams (excluding cover art)")
+            cmd.extend(["-map", "0:V", "-map", "0:a", "-map", "0:s"])
+            print(f"[DEBUG] Mapping video, audio and subtitle streams (excluding cover art)")
+        else:
+            cmd.extend(["-map", "0:V", "-map", "0:a"])
+            print(f"[DEBUG] Mapping video and audio streams only (no subtitles found)")
         
-        # Для MP4 добавляем флаг быстрого старта
         if output_format == "mp4":
             cmd.extend(["-movflags", "+faststart"])
             print(f"[DEBUG] Added faststart flag for MP4")
@@ -671,7 +630,6 @@ class VideoProcessor:
         print(f"[DEBUG]   CRF: {crf_value}")
         print(f"[DEBUG]   Preset: {preset_value}")
         
-        # Получаем информацию о битрейте, если она не была передана
         if video_info is None:
             video_info = self.get_video_info(input_path)
             if "error" in video_info:
@@ -682,26 +640,20 @@ class VideoProcessor:
         print(f"[DEBUG] GPU info: {gpu_info}")
         print(f"[DEBUG] Has NVENC: {has_nvenc}")
         
-        # Формируем базовую команду FFmpeg
         cmd = [self.ffmpeg_path, "-y"]
         
-        # Добавляем аппаратное ускорение декодирования ДО указания входного файла
         if video_info.get("is_hevc", False) and has_nvenc:
             cmd.extend(["-hwaccel", "cuda"])
             print(f"[DEBUG] Using CUDA hardware acceleration for HEVC decoding")
         
-        # Теперь добавляем входной файл
         cmd.extend(["-i", input_path])
         
-        # Добавляем фильтры при необходимости
         vf_filters = []
         
-        # Если исходное видео 10-битное, а кодек не поддерживает 10 бит, добавляем преобразование
         if video_info.get("is_10bit", False) and codec != "libx265":
             vf_filters.append("format=yuv420p")
             print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
         
-        # Для H.264 добавляем фильтр выравнивания размеров, используя pad как в bat-файле
         if codec == "libx264" and not use_hardware:
             vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
             print(f"[DEBUG] Adding pad filter for H.264")
@@ -710,7 +662,6 @@ class VideoProcessor:
             cmd.extend(["-vf", ",".join(vf_filters)])
             print(f"[DEBUG] Added video filters: {','.join(vf_filters)}")
         
-        # Настраиваем кодеки в зависимости от выбранного кодека и наличия GPU
         if codec == "libvpx-vp9":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "vp9_nvenc", "-crf", str(crf_value), "-b:v", "0"])
@@ -719,7 +670,6 @@ class VideoProcessor:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
                 print(f"[DEBUG] Using VP9 software encoder")
-            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
             cmd.extend(["-c:a", "aac", "-b:a", "320k"])
             print(f"[DEBUG] Converting audio to AAC 320k")
         elif codec == "libx265":
@@ -729,7 +679,6 @@ class VideoProcessor:
             else:
                 cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
                 print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
-            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
             cmd.extend(["-c:a", "aac", "-b:a", "320k"])
             print(f"[DEBUG] Converting audio to AAC 320k")
         else:  # libx264
@@ -746,22 +695,18 @@ class VideoProcessor:
                 ])
                 print(f"[DEBUG] Using H.264 hardware encoder")
             else:
-                # Используем выбранный пресет
                 cmd.extend([
                     "-c:v", "libx264", 
                     "-crf", str(crf_value), 
                     "-preset", preset_value
                 ])
                 print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
-            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
             cmd.extend(["-c:a", "aac", "-b:a", "320k"])
             print(f"[DEBUG] Converting audio to AAC 320k")
             
-        # Добавляем map только для видеопотоков и аудиопотоков, исключая субтитры и обложку
         cmd.extend(["-map", "0:V", "-map", "0:a"])
         print(f"[DEBUG] Mapping video and audio streams only (excluding subtitles and cover art)")
         
-        # Для MP4 добавляем флаг быстрого старта
         if output_format == "mp4":
             cmd.extend(["-movflags", "+faststart"])
             print(f"[DEBUG] Added faststart flag for MP4")
@@ -783,7 +728,6 @@ class VideoProcessor:
         print(f"[DEBUG]   CRF: {crf_value}")
         print(f"[DEBUG]   Preset: {preset_value}")
         
-        # Получаем информацию о битрейте, если она не была передана
         if video_info is None:
             video_info = self.get_video_info(input_path)
             if "error" in video_info:
@@ -794,26 +738,20 @@ class VideoProcessor:
         print(f"[DEBUG] GPU info: {gpu_info}")
         print(f"[DEBUG] Has NVENC: {has_nvenc}")
         
-        # Формируем базовую команду FFmpeg
         cmd = [self.ffmpeg_path, "-y"]
         
-        # Добавляем аппаратное ускорение декодирования ДО указания входного файла
         if video_info.get("is_hevc", False) and has_nvenc:
             cmd.extend(["-hwaccel", "cuda"])
             print(f"[DEBUG] Using CUDA hardware acceleration for HEVC decoding")
         
-        # Теперь добавляем входной файл
         cmd.extend(["-i", input_path])
         
-        # Добавляем фильтры при необходимости
         vf_filters = []
         
-        # Если исходное видео 10-битное, а кодек не поддерживает 10 бит, добавляем преобразование
         if video_info.get("is_10bit", False) and codec != "libx265":
             vf_filters.append("format=yuv420p")
             print(f"[DEBUG] Adding 10-bit to 8-bit conversion filter")
         
-        # Для H.264 добавляем фильтр выравнивания размеров, используя pad как в bat-файле
         if codec == "libx264" and not use_hardware:
             vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
             print(f"[DEBUG] Adding pad filter for H.264")
@@ -822,7 +760,6 @@ class VideoProcessor:
             cmd.extend(["-vf", ",".join(vf_filters)])
             print(f"[DEBUG] Added video filters: {','.join(vf_filters)}")
         
-        # Настраиваем кодеки в зависимости от выбранного кодека и наличия GPU
         if codec == "libvpx-vp9":
             if use_hardware and has_nvenc:
                 cmd.extend(["-c:v", "vp9_nvenc", "-crf", str(crf_value), "-b:v", "0"])
@@ -831,7 +768,6 @@ class VideoProcessor:
                 cmd.extend(["-c:v", "libvpx-vp9", "-crf", str(crf_value), "-b:v", "0"])
                 cmd.extend(["-deadline", "good", "-cpu-used", "2"])
                 print(f"[DEBUG] Using VP9 software encoder")
-            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
             cmd.extend(["-c:a", "aac", "-b:a", "320k"])
             print(f"[DEBUG] Converting audio to AAC 320k")
         elif codec == "libx265":
@@ -841,7 +777,6 @@ class VideoProcessor:
             else:
                 cmd.extend(["-c:v", "libx265", "-crf", str(crf_value), "-preset", preset_value])
                 print(f"[DEBUG] Using HEVC software encoder with preset: {preset_value}")
-            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
             cmd.extend(["-c:a", "aac", "-b:a", "320k"])
             print(f"[DEBUG] Converting audio to AAC 320k")
         else:  # libx264
@@ -858,22 +793,18 @@ class VideoProcessor:
                 ])
                 print(f"[DEBUG] Using H.264 hardware encoder")
             else:
-                # Используем выбранный пресет
                 cmd.extend([
                     "-c:v", "libx264", 
                     "-crf", str(crf_value), 
                     "-preset", preset_value
                 ])
                 print(f"[DEBUG] Using H.264 software encoder with preset: {preset_value}")
-            # Конвертируем аудио в AAC с битрейтом 320k как в bat-файле
             cmd.extend(["-c:a", "aac", "-b:a", "320k"])
             print(f"[DEBUG] Converting audio to AAC 320k")
             
-        # Добавляем map для всех потоков, но исключаем данные (обложки и т.д.)
         cmd.extend(["-map", "0", "-map", "-0:d"])
         print(f"[DEBUG] Mapping all streams except data streams (cover art)")
         
-        # Для MP4 добавляем флаг быстрого старта
         if output_format == "mp4":
             cmd.extend(["-movflags", "+faststart"])
             print(f"[DEBUG] Added faststart flag for MP4")
@@ -882,45 +813,3 @@ class VideoProcessor:
         print(f"[DEBUG] Final command: {' '.join(cmd)}")
         
         return self._run_command_with_progress(cmd, progress_callback, duration_seconds, "Сжатие с полным маппингом", process_setter)
-
-    def _calculate_target_bitrate(self, original_bitrate: int, crf_value: int, codec: str, use_hardware: bool = False) -> int:
-        """
-        Рассчитывает целевой битрейт на основе оригинального битрейта и CRF значения.
-        """
-        if original_bitrate <= 0:
-            # Если не удалось определить оригинальный битрейт, используем значения по умолчанию
-            if codec == "libvpx-vp9":
-                return 1500
-            else:
-                return 2000
-        
-        # Базовый коэффициент сжатия на основе CRF и кодека
-        if codec == "libx264":
-            # Для libx264 используем стандартные значения
-            base_factor = 0.7
-            # Каждый шаг CRF изменяет коэффициент примерно на 5%
-            crf_adjustment = (23 - crf_value) * 0.05
-        elif codec == "libx265":
-            # Для libx265 используем стандартные значения
-            base_factor = 0.6
-            # Каждый шаг CRF изменяет коэффициент примерно на 4%
-            crf_adjustment = (28 - crf_value) * 0.04
-        else:  # libvpx-vp9
-            # Для libvpx-vp9 используем стандартные значения
-            base_factor = 0.6
-            # Каждый шаг CRF изменяет коэффициент примерно на 4%
-            crf_adjustment = (28 - crf_value) * 0.04
-            
-        # Рассчитываем целевой битрейт
-        target_factor = max(0.2, min(1.0, base_factor + crf_adjustment))
-        target_bitrate = int(original_bitrate * target_factor / 1000)  # Конвертируем в кбит/с
-        
-        # Ограничиваем минимальный и максимальный битрейт
-        if codec == "libvpx-vp9":
-            min_bitrate = 300
-            max_bitrate = 8000
-        else:
-            min_bitrate = 500
-            max_bitrate = 10000
-            
-        return max(min_bitrate, min(max_bitrate, target_bitrate))

@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QPushButton, QLabel, QFileDialog,
                                QProgressBar, QTextEdit, QGroupBox,
                                QMessageBox, QComboBox, QCheckBox, QSlider,
-                               QDialog, QTextBrowser, QRadioButton, QButtonGroup,
+                               QRadioButton, QButtonGroup,
                                QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
@@ -12,107 +12,8 @@ from config import (OUTPUT_FORMATS, CODECS, DEFAULT_OUTPUT_FORMAT_KEY, DEFAULT_C
                    DEFAULT_USE_HARDWARE_ENCODING)
 from video_processor import VideoProcessor
 from ffmpeg_downloader import FFmpegDownloader
-
-
-class VideoInfoDialog(QDialog):
-    def __init__(self, video_info, parent=None):
-        super().__init__(parent)
-        self.video_info = video_info
-        self.setWindowTitle("Информация о видео")
-        self.setModal(True)
-        self.resize(500, 400)
-        self.setup_ui()
-
-    def setup_ui(self):
-        layout = QVBoxLayout()
-        title = QLabel("Информация о файле")
-        title_font = QFont()
-        title_font.setPointSize(16)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        layout.addWidget(title)
-        info_text = QTextBrowser()
-        audio_info = ""
-        audio_tracks = self.video_info.get('audio_tracks', [])
-        if audio_tracks:
-            audio_info = f"<b>Аудиодорожки:</b> {len(audio_tracks)}<br>"
-            for i, track in enumerate(audio_tracks):
-                lang = track.get('language', 'und')
-                title_str = track.get('title', f'Audio {i+1}')
-                channels = track.get('channels', 0)
-                audio_info += f"&nbsp;&nbsp;• {title_str} ({lang}, {channels}ch)<br>"
-        else:
-            audio_info = "<b>Аудиодорожки:</b> Не найдены<br>"
-        
-        needs_vfr_text = "Да" if self.video_info.get('needs_vfr_fix') else "Нет"
-        
-        info_html = f"""
-        <b>Путь:</b> {self.video_info.get('path', 'N/A')}<br>
-        <b>Размер:</b> {self.video_info.get('size_mb', 0):.2f} МБ<br>
-        <b>Длительность:</b> {self.video_info.get('duration', 0):.2f} сек<br>
-        <b>Разрешение:</b> {self.video_info.get('width', 0)}x{self.video_info.get('height', 0)}<br>
-        <b>FPS:</b> {self.video_info.get('fps', 0):.2f}<br>
-        <b>Битрейт видео:</b> {self.video_info.get('video_bitrate', 0) // 1000} кбит/с<br>
-        <b>Битрейт аудио:</b> {self.video_info.get('audio_bitrate', 0) // 1000} кбит/с<br>
-        <b>Требуется VFR fix:</b> {needs_vfr_text}<br>
-        <b>Примерный размер после сжатия:</b> {self.video_info.get('estimated_size_mb', 0):.2f} МБ<br>
-        {audio_info}
-        <b>GPU:</b> {self.video_info.get('gpu_info', 'N/A')}<br>
-        <b>Режим обработки:</b> {self.video_info.get('processing_mode', 'N/A')}
-        """
-        info_text.setHtml(info_html)
-        layout.addWidget(info_text)
-        close_btn = QPushButton("Закрыть")
-        close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
-        self.setLayout(layout)
-
-
-class WorkerThread(QThread):
-    progress_updated = Signal(int, str)
-    finished = Signal(str)
-    error_occurred = Signal(str)
-    info_ready = Signal(dict)
-
-    def __init__(self, processor, mode, **kwargs):
-        super().__init__()
-        self.processor = processor
-        self.mode = mode
-        self.kwargs = kwargs
-        self.process = None
-
-    def run(self):
-        try:
-            if self.mode == 'info':
-                info = self.processor.get_video_info(self.kwargs['input_path'])
-                if "error" in info:
-                    self.error_occurred.emit(info["error"])
-                else:
-                    self.info_ready.emit(info)
-            elif self.mode == 'compress':
-                result = self.processor.compress_video(
-                    progress_callback=self.progress_updated.emit,
-                    process_setter=self.set_process,
-                    **self.kwargs
-                )
-                self.finished.emit(result)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            self.error_occurred.emit(str(e))
-    
-    def set_process(self, process):
-        """Сохраняет ссылку на процесс FFmpeg для возможности остановки"""
-        self.process = process
-    
-    def stop(self):
-        """Останавливает процесс сжатия"""
-        if self.process:
-            try:
-                self.process.terminate()
-                self.process.wait(timeout=5)
-            except Exception:
-                pass
+from dialogs import VideoInfoDialog
+from threads import WorkerThread
 
 
 class MainWindow(QMainWindow):
@@ -131,6 +32,9 @@ class MainWindow(QMainWindow):
         self.batch_in_progress = False
         self.total_files_in_batch = 0
         self.completed_files_in_batch = 0
+        
+        # Путь для сохранения файлов
+        self.output_directory = None
         
         self.init_ui()
 
@@ -195,10 +99,27 @@ class MainWindow(QMainWindow):
         self.info_btn = QPushButton("Информация о файле")
         self.info_btn.clicked.connect(self.show_info)
         self.info_btn.setEnabled(False)
+        
+        # Кнопка выбора пути сохранения
+        self.output_dir_btn = QPushButton("Путь сохранения")
+        self.output_dir_btn.clicked.connect(self.select_output_directory)
+        self.output_dir_btn.setToolTip("Выбрать папку для сохранения сжатых файлов")
+        self.output_dir_label = QLabel("Сохранять в папке с оригиналами")
+        self.output_dir_label.setStyleSheet("color: gray; font-size: 10px;")
+        
         file_select_layout.addWidget(self.select_file_btn)
         file_select_layout.addWidget(self.info_btn)
+        file_select_layout.addWidget(self.output_dir_btn)
         file_select_layout.addStretch()
         file_layout.addLayout(file_select_layout)
+        
+        # Метка с путем сохранения
+        output_path_layout = QHBoxLayout()
+        output_path_layout.addWidget(QLabel("Путь сохранения:"))
+        output_path_layout.addWidget(self.output_dir_label)
+        output_path_layout.addStretch()
+        file_layout.addLayout(output_path_layout)
+        
         file_layout.addWidget(self.file_label)
         self.queue_label = QLabel("В очереди: 0 файлов")
         file_layout.addWidget(self.queue_label)
@@ -318,6 +239,22 @@ class MainWindow(QMainWindow):
             if url.isLocalFile():
                 self.add_file_to_queue(url.toLocalFile())
         self.update_queue_label()
+
+    def select_output_directory(self):
+        directory = QFileDialog.getExistingDirectory(
+            self, "Выберите папку для сохранения сжатых файлов",
+            "" if not self.output_directory else self.output_directory
+        )
+        
+        if directory:
+            self.output_directory = directory
+            self.output_dir_label.setText(directory)
+            self.output_dir_label.setStyleSheet("color: green; font-size: 10px;")
+            self.log_text.append(f"Выбрана папка для сохранения: {directory}")
+        else:
+            self.output_directory = None
+            self.output_dir_label.setText("Сохранять в папке с оригиналами")
+            self.output_dir_label.setStyleSheet("color: gray; font-size: 10px;")
 
     def add_file_to_queue(self, file_path):
         if os.path.isfile(file_path):
@@ -539,7 +476,8 @@ class MainWindow(QMainWindow):
             "crf_value": self.crf_slider.value(),
             "preset_value": self.preset_combo.currentData(),
             "force_vfr_fix": self.vfr_checkbox.isChecked(),
-            "use_hardware": self.hardware_radio.isChecked()
+            "use_hardware": self.hardware_radio.isChecked(),
+            "output_dir": self.output_directory  # Передаем путь сохранения
         }
         self.set_ui_enabled(False)
         self.run_compression_worker(**params)
@@ -692,6 +630,7 @@ class MainWindow(QMainWindow):
         self.vfr_checkbox.setEnabled(enabled)
         self.hardware_radio.setEnabled(enabled)
         self.software_radio.setEnabled(enabled)
+        self.output_dir_btn.setEnabled(enabled)
 
     def closeEvent(self, event):
         if self.compression_worker and self.compression_worker.isRunning():
