@@ -1,6 +1,7 @@
 import sys
 import os
 import logging
+from datetime import datetime
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QPushButton, QLabel, QFileDialog,
                                QProgressBar, QTextEdit, QGroupBox,
@@ -41,6 +42,9 @@ class MainWindow(QMainWindow):
         
         # Путь для сохранения файлов
         self.output_directory = None
+        
+        # Переменная для отслеживания времени начала сжатия
+        self.compression_start_time = None
         
         # Setup logging
         setup_logging(self.log_slot)
@@ -585,6 +589,10 @@ class MainWindow(QMainWindow):
         
         self.processing_stopped = False
         
+        # Запоминаем время начала сжатия
+        self.compression_start_time = datetime.now()
+        logging.info(f"Начало сжатия файла: {os.path.basename(self.current_file)}")
+        
         params = {
             "input_path": self.current_file,
             "output_format": self.format_combo.currentData(),
@@ -680,6 +688,13 @@ class MainWindow(QMainWindow):
             logging.info(f"Файл обработан. Прогресс по пакету: {self.completed_files_in_batch}/{self.total_files_in_batch}")
 
     def on_finished(self, result):
+        # Рассчитываем и логируем время сжатия
+        if self.compression_start_time:
+            compression_time = datetime.now() - self.compression_start_time
+            compression_time_str = str(compression_time).split('.')[0]  # Обрезаем микросекунды
+            logging.info(f"Сжатие файла завершено. Затрачено времени: {compression_time_str}")
+            self.compression_start_time = None # Сбрасываем таймер
+
         logging.info(f"Готово: {result}")
         self._handle_file_completion()
         
@@ -689,6 +704,13 @@ class MainWindow(QMainWindow):
             self.on_canceled()
 
     def on_error(self, error):
+        # Логируем время даже в случае ошибки
+        if self.compression_start_time:
+            compression_time = datetime.now() - self.compression_start_time
+            compression_time_str = str(compression_time).split('.')[0]
+            logging.info(f"Сжатие файла прервано ошибкой. Затрачено времени: {compression_time_str}")
+            self.compression_start_time = None
+
         logging.error(f"ОШИБКА: {error}")
         self.status_label.setText("Ошибка при обработке!")
         if self.sender() == self.compression_worker:
@@ -748,7 +770,9 @@ class MainWindow(QMainWindow):
 
     def log_slot(self, message):
         """Слот для приема сообщений лога от QtHandler"""
-        self.log_text.append(message)
+        if hasattr(self, 'log_text'):
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            self.log_text.append(f"[{timestamp}] {message}")
 
     def closeEvent(self, event):
         if self.compression_worker and self.compression_worker.isRunning():
