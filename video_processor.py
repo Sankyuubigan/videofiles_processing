@@ -4,7 +4,7 @@
 import logging
 from pathlib import Path
 from typing import Optional, Callable
-from config import COMPRESSED_VIDEO_SUFFIX
+from config import COMPRESSED_VIDEO_SUFFIX, TRIMMED_VIDEO_SUFFIX
 from video_size_estimator import VideoSizeEstimator
 from ffmpeg_handler import FFmpegHandler
 
@@ -177,3 +177,63 @@ class VideoProcessor:
         except Exception as e:
             logging.error(f"Exception during compression: {str(e)}")
             raise e
+
+    def trim_video(self, input_path: str, seconds: float, from_start: bool, 
+                   progress_callback: Optional[Callable] = None,
+                   process_setter: Optional[Callable] = None,
+                   output_dir: Optional[str] = None) -> str:
+        """Метод для сокращения видео"""
+        logging.debug(f"Starting trim operation: remove {seconds}s from {'start' if from_start else 'end'}")
+        
+        input_p = Path(input_path)
+        
+        if progress_callback:
+            progress_callback(5, "Анализ длительности...")
+            
+        video_info = self.get_video_info(input_path)
+        if "error" in video_info:
+            raise Exception(video_info["error"])
+            
+        total_duration = video_info.get("duration", 0)
+        if total_duration <= 0:
+            raise Exception("Не удалось определить длительность видео")
+            
+        if seconds >= total_duration:
+            raise Exception("Количество удаляемых секунд больше или равно длительности видео")
+            
+        # Рассчитываем параметры обрезки
+        if from_start:
+            # Удаляем с начала: старт сдвигается, длительность уменьшается
+            start_time = seconds
+            new_duration = total_duration - seconds
+        else:
+            # Удаляем с конца: старт 0, длительность уменьшается
+            start_time = 0
+            new_duration = total_duration - seconds
+            
+        if output_dir:
+            output_path = Path(output_dir) / f"{input_p.stem}{TRIMMED_VIDEO_SUFFIX}{input_p.suffix}"
+        else:
+            output_path = input_p.with_name(f"{input_p.stem}{TRIMMED_VIDEO_SUFFIX}{input_p.suffix}")
+            
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception as e:
+                logging.error(f"Error deleting existing file: {e}")
+        
+        def trim_progress(p, m):
+            progress_callback(p, m) if progress_callback else None
+            
+        success, msg = self.ffmpeg_handler.trim_video_core(
+            input_path, str(output_path), start_time, new_duration,
+            trim_progress, new_duration, process_setter
+        )
+        
+        if not success:
+            raise Exception(f"Ошибка при сокращении видео: {msg}")
+            
+        if progress_callback:
+            progress_callback(100, "Готово!")
+            
+        return str(output_path)

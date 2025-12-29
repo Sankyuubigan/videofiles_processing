@@ -30,6 +30,13 @@ class WorkerThread(QThread):
                     **self.kwargs
                 )
                 self.finished.emit(result)
+            elif self.mode == 'trim':
+                result = self.processor.trim_video(
+                    progress_callback=self.progress_updated.emit,
+                    process_setter=self.set_process,
+                    **self.kwargs
+                )
+                self.finished.emit(result)
         except Exception as e:
             import traceback
             traceback.print_exc()

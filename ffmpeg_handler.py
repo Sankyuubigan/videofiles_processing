@@ -664,3 +664,33 @@ class FFmpegHandler:
         logging.debug(f"Final command: {' '.join(cmd)}")
         
         return self._run_command_with_progress(cmd, progress_callback, duration_seconds, "Сжатие с полным маппингом", process_setter)
+
+    def trim_video_core(self, input_path: str, output_path: str, start_time: float, duration: float, 
+                        progress_callback: Optional[Callable], total_duration_for_progress: float,
+                        process_setter: Optional[Callable] = None) -> tuple[bool, str]:
+        """
+        Обрезает видео. Использует перекодирование для точности.
+        Параметры кодирования стандартные (H.264, CRF 23), чтобы обеспечить хорошее качество.
+        """
+        logging.debug(f"Starting trim:")
+        logging.debug(f"  Input: {input_path}")
+        logging.debug(f"  Output: {output_path}")
+        logging.debug(f"  Start: {start_time}")
+        logging.debug(f"  Duration: {duration}")
+
+        cmd = [self.ffmpeg_path, "-y"]
+        
+        # Seeking до input для скорости, но с перекодированием это нормально работает
+        cmd.extend(["-ss", str(start_time)])
+        cmd.extend(["-i", input_path])
+        cmd.extend(["-t", str(duration)])
+        
+        # Используем стандартные настройки для обеспечения совместимости и качества
+        # libx264, crf 23, preset medium - хороший баланс
+        cmd.extend(["-c:v", "libx264", "-crf", "23", "-preset", "medium"])
+        cmd.extend(["-c:a", "aac", "-b:a", "192k"])
+        
+        cmd.extend(["-progress", "pipe:1", output_path])
+        logging.debug(f"Trim command: {' '.join(cmd)}")
+        
+        return self._run_command_with_progress(cmd, progress_callback, duration, "Сокращение", process_setter)

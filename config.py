@@ -166,3 +166,4 @@ VFR_INDICATORS = {
 
 TEMP_FIXED_VIDEO_SUFFIX   = "_temp_fixed_cfr"
 COMPRESSED_VIDEO_SUFFIX   = "_compressed"
+TRIMMED_VIDEO_SUFFIX      = "_trimmed"

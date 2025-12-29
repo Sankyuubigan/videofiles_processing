@@ -8,11 +8,11 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QMessageBox, QComboBox, QCheckBox, QSlider,
                                QRadioButton, QButtonGroup,
                                QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-                               QTabWidget, QToolButton)
+                               QTabWidget, QToolButton, QSpinBox)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 from config import (OUTPUT_FORMATS, CODECS, DEFAULT_OUTPUT_FORMAT_KEY, DEFAULT_CODEC_KEY,
-                   DEFAULT_USE_HARDWARE_ENCODING)
+                   DEFAULT_USE_HARDWARE_ENCODING, TRIMMED_VIDEO_SUFFIX)
 from video_processor import VideoProcessor
 from ffmpeg_downloader import FFmpegDownloader
 from dialogs import VideoInfoDialog
@@ -53,7 +53,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Video Compressor")
-        self.setGeometry(100, 100, 1200, 700)
+        self.setGeometry(100, 100, 1200, 750)
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
@@ -107,8 +107,18 @@ class MainWindow(QMainWindow):
         queue_group.setLayout(queue_layout)
         main_tab_layout.addWidget(queue_group)
 
-        settings_group = self.create_settings_group()
-        main_tab_layout.addWidget(settings_group)
+        # Вкладки операций (Сжатие, Сокращение)
+        self.operations_tabs = QTabWidget()
+        
+        # Вкладка Сжатие
+        self.compression_tab = self.create_compression_tab()
+        self.operations_tabs.addTab(self.compression_tab, "Сжатие")
+        
+        # Вкладка Сокращение
+        self.trim_tab = self.create_trim_tab()
+        self.operations_tabs.addTab(self.trim_tab, "Сокращение")
+        
+        main_tab_layout.addWidget(self.operations_tabs)
 
         process_group = self.create_process_group()
         main_tab_layout.addWidget(process_group)
@@ -150,9 +160,10 @@ class MainWindow(QMainWindow):
         file_group.setLayout(file_layout)
         return file_group
 
-    def create_settings_group(self):
-        settings_group = QGroupBox("2. Настройки сжатия")
-        settings_layout = QVBoxLayout()
+    def create_compression_tab(self):
+        """Создает содержимое вкладки 'Сжатие'"""
+        tab = QWidget()
+        settings_layout = QVBoxLayout(tab)
         
         # Выбор формата
         format_layout = QHBoxLayout()
@@ -222,16 +233,55 @@ class MainWindow(QMainWindow):
         settings_layout.addLayout(preset_layout)
         settings_layout.addLayout(crf_layout)
         settings_layout.addLayout(vfr_layout)
-        settings_group.setLayout(settings_layout)
-        return settings_group
+        
+        return tab
+
+    def create_trim_tab(self):
+        """Создает содержимое вкладки 'Сокращение'"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        
+        # Настройка количества секунд
+        seconds_layout = QHBoxLayout()
+        seconds_layout.addWidget(QLabel("Количество секунд для удаления:"))
+        self.trim_seconds_spin = QSpinBox()
+        self.trim_seconds_spin.setRange(1, 3600) # От 1 секунды до 1 часа
+        self.trim_seconds_spin.setValue(10)
+        self.trim_seconds_spin.setSuffix(" сек")
+        seconds_layout.addWidget(self.trim_seconds_spin)
+        seconds_layout.addStretch()
+        
+        # Выбор откуда удалять
+        position_layout = QHBoxLayout()
+        position_layout.addWidget(QLabel("Удалять с:"))
+        self.trim_position_group = QButtonGroup(self)
+        self.trim_from_end_radio = QRadioButton("Конца")
+        self.trim_from_start_radio = QRadioButton("Начала")
+        self.trim_position_group.addButton(self.trim_from_end_radio)
+        self.trim_position_group.addButton(self.trim_from_start_radio)
+        self.trim_from_end_radio.setChecked(True) # По умолчанию с конца
+        
+        position_layout.addWidget(self.trim_from_end_radio)
+        position_layout.addWidget(self.trim_from_start_radio)
+        position_layout.addStretch()
+        
+        info_label = QLabel("Примечание: Видео будет сохранено с суффиксом '_trimmed'.")
+        info_label.setStyleSheet("color: gray; font-style: italic;")
+        
+        layout.addLayout(seconds_layout)
+        layout.addLayout(position_layout)
+        layout.addWidget(info_label)
+        layout.addStretch()
+        
+        return tab
 
     def create_process_group(self):
-        process_group = QGroupBox("3. Запуск обработки")
+        process_group = QGroupBox("Запуск обработки")
         process_layout = QVBoxLayout()
         
         # Кнопки управления процессом
         buttons_layout = QHBoxLayout()
-        self.process_btn = QPushButton("Сжать видео")
+        self.process_btn = QPushButton("Начать обработку") # Переименовал кнопку
         self.process_btn.clicked.connect(self.start_processing)
         self.process_btn.setEnabled(False)
         
@@ -589,40 +639,56 @@ class MainWindow(QMainWindow):
         
         self.processing_stopped = False
         
-        # Запоминаем время начала сжатия
+        # Запоминаем время начала обработки
         self.compression_start_time = datetime.now()
-        logging.info(f"Начало сжатия файла: {os.path.basename(self.current_file)}")
         
-        params = {
-            "input_path": self.current_file,
-            "output_format": self.format_combo.currentData(),
-            "codec": self.codec_combo.currentData(),
-            "crf_value": self.crf_slider.value(),
-            "preset_value": self.preset_combo.currentData(),
-            "force_vfr_fix": self.vfr_checkbox.isChecked(),
-            "use_hardware": self.hardware_radio.isChecked(),
-            "output_dir": self.output_directory  # Передаем путь сохранения
-        }
+        # Определяем текущую активную операцию (вкладку)
+        current_tab_index = self.operations_tabs.currentIndex()
+        current_tab_text = self.operations_tabs.tabText(current_tab_index)
+        
+        params = {"input_path": self.current_file, "output_dir": self.output_directory}
+        worker_mode = ""
+
+        if current_tab_text == "Сжатие":
+            worker_mode = "compress"
+            params.update({
+                "output_format": self.format_combo.currentData(),
+                "codec": self.codec_combo.currentData(),
+                "crf_value": self.crf_slider.value(),
+                "preset_value": self.preset_combo.currentData(),
+                "force_vfr_fix": self.vfr_checkbox.isChecked(),
+                "use_hardware": self.hardware_radio.isChecked(),
+            })
+            logging.info(f"Начало сжатия файла: {os.path.basename(self.current_file)}")
+            
+        elif current_tab_text == "Сокращение":
+            worker_mode = "trim"
+            params.update({
+                "seconds": self.trim_seconds_spin.value(),
+                "from_start": self.trim_from_start_radio.isChecked()
+            })
+            logging.info(f"Начало сокращения файла: {os.path.basename(self.current_file)}")
+
         self.set_ui_enabled(False)
-        self.run_compression_worker(**params)
+        self.run_processing_worker(worker_mode, **params)
 
     def cancel_processing(self):
         reply = QMessageBox.question(
             self, "Подтверждение отмены",
-            "Вы уверены, что хотите отменить процесс сжатия и всю очередь?",
+            "Вы уверены, что хотите отменить процесс и всю очередь?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         
         if reply == QMessageBox.Yes:
             self.processing_stopped = True
             if self.compression_worker:
-                logging.info("Отмена процесса сжатия и всей очереди...")
+                logging.info("Отмена процесса и всей очереди...")
                 self.status_label.setText("Отмена процесса...")
                 self.compression_worker.stop()
                 QTimer.singleShot(1000, self.on_canceled)
 
     def on_canceled(self):
-        logging.info("Процесс сжатия и обработка очереди отменены пользователем")
+        logging.info("Процесс обработки очереди отменен пользователем")
         self.status_label.setText("Отменено пользователем")
         self.progress_bar.setValue(0)
         
@@ -638,8 +704,8 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Готов к работе")
         self.progress_bar.setValue(0)
 
-    def run_compression_worker(self, **kwargs):
-        self.compression_worker = WorkerThread(self.processor, 'compress', **kwargs)
+    def run_processing_worker(self, mode, **kwargs):
+        self.compression_worker = WorkerThread(self.processor, mode, **kwargs)
         self.compression_worker.progress_updated.connect(self.update_progress)
         self.compression_worker.finished.connect(self.on_finished)
         self.compression_worker.error_occurred.connect(self.on_error)
@@ -675,7 +741,7 @@ class MainWindow(QMainWindow):
             self.progress_bar.setValue(total_progress_percent)
             
             current_file_name = os.path.basename(self.current_file) if self.current_file else "неизвестный файл"
-            self.status_label.setText(f"Сжатие: {current_file_name} ({value}%) | Общий прогресс: {total_progress_percent}%")
+            self.status_label.setText(f"Обработка: {current_file_name} ({value}%) | Общий прогресс: {total_progress_percent}%")
         else:
             # Для одиночного файла или вне пакета
             self.progress_bar.setValue(value)
@@ -688,11 +754,11 @@ class MainWindow(QMainWindow):
             logging.info(f"Файл обработан. Прогресс по пакету: {self.completed_files_in_batch}/{self.total_files_in_batch}")
 
     def on_finished(self, result):
-        # Рассчитываем и логируем время сжатия
+        # Рассчитываем и логируем время обработки
         if self.compression_start_time:
             compression_time = datetime.now() - self.compression_start_time
             compression_time_str = str(compression_time).split('.')[0]  # Обрезаем микросекунды
-            logging.info(f"Сжатие файла завершено. Затрачено времени: {compression_time_str}")
+            logging.info(f"Обработка файла завершена. Затрачено времени: {compression_time_str}")
             self.compression_start_time = None # Сбрасываем таймер
 
         logging.info(f"Готово: {result}")
@@ -708,7 +774,7 @@ class MainWindow(QMainWindow):
         if self.compression_start_time:
             compression_time = datetime.now() - self.compression_start_time
             compression_time_str = str(compression_time).split('.')[0]
-            logging.info(f"Сжатие файла прервано ошибкой. Затрачено времени: {compression_time_str}")
+            logging.info(f"Обработка файла прервана ошибкой. Затрачено времени: {compression_time_str}")
             self.compression_start_time = None
 
         logging.error(f"ОШИБКА: {error}")
@@ -759,13 +825,7 @@ class MainWindow(QMainWindow):
         self.process_btn.setEnabled(enabled and self.current_file is not None)
         self.cancel_btn.setEnabled(not enabled and self.current_file is not None)
         self.cancel_btn.setVisible(not enabled and self.current_file is not None)
-        self.format_combo.setEnabled(enabled)
-        self.codec_combo.setEnabled(enabled)
-        self.preset_combo.setEnabled(enabled)
-        self.crf_slider.setEnabled(enabled)
-        self.vfr_checkbox.setEnabled(enabled)
-        self.hardware_radio.setEnabled(enabled)
-        self.software_radio.setEnabled(enabled)
+        self.operations_tabs.setEnabled(enabled) # Блокируем вкладки операций
         self.output_dir_btn.setEnabled(enabled)
 
     def log_slot(self, message):
@@ -777,7 +837,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if self.compression_worker and self.compression_worker.isRunning():
             reply = QMessageBox.question(self, "Выход",
-                                         "Процесс сжатия еще не завершен. Вы уверены, что хотите выйти?",
+                                         "Процесс обработки еще не завершен. Вы уверены, что хотите выйти?",
                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply == QMessageBox.Yes:
                 if self.compression_worker:

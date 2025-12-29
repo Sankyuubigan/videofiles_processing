@@ -2,6 +2,7 @@ import sys
 import os
 import shutil
 import subprocess
+import re
 from pathlib import Path
 from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                                QWidget, QPushButton, QLabel, QFileDialog, 
@@ -10,6 +11,7 @@ from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QFont
 import time
 import uuid
+import yt_dlp
 
 class WorkerThread(QThread):
     progress_updated = Signal(int, str)
@@ -22,11 +24,32 @@ class WorkerThread(QThread):
         self.video_path = video_path
         self.video_link = video_link
         self.volume_ratio = volume_ratio
+        self.is_downloading = False
+
+    def clean_console_output(self, text):
+        """Удаляет ANSI-коды и исправляет кодировку"""
+        if not text:
+            return ""
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        text = ansi_escape.sub('', text)
+        return text.strip()
+
+    def normalize_url(self, url):
+        """Приводит ссылку к стандартному виду youtube.com"""
+        try:
+            if 'youtu.be/' in url:
+                # Извлекаем ID из короткой ссылки
+                video_id = url.split('youtu.be/')[1].split('?')[0]
+                return f"https://www.youtube.com/watch?v={video_id}"
+            elif 'youtube.com/shorts/' in url:
+                video_id = url.split('shorts/')[1].split('?')[0]
+                return f"https://www.youtube.com/watch?v={video_id}"
+        except:
+            pass
+        return url
 
     def is_file_locked(self, filepath):
-        """Проверка, заблокирован ли файл"""
         try:
-            # Пытаемся открыть файл в режиме записи
             with open(filepath, 'a') as f:
                 pass
             return False
@@ -34,7 +57,6 @@ class WorkerThread(QThread):
             return True
 
     def wait_for_file_unlock(self, filepath, timeout=10):
-        """Ждать разблокировки файла"""
         self.debug_info.emit(f"Ожидание разблокировки файла: {filepath}")
         for i in range(timeout):
             if not self.is_file_locked(filepath):
@@ -44,235 +66,219 @@ class WorkerThread(QThread):
         return False
 
     def find_vot_cli(self):
-        """Поиск vot-cli в системе"""
         self.debug_info.emit("Поиск vot-cli в системе...")
         
-        # Способ 1: Проверка vot-cli как команды
-        try:
-            result = subprocess.run(['vot-cli', '--version'], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                self.debug_info.emit(f"Найден vot-cli как команда: {result.stdout.strip()}")
-                return ['vot-cli']
-        except:
-            self.debug_info.emit("vot-cli как команда не найден")
+        possible_cmds = [
+            ['vot-cli'],
+            [sys.executable, '-m', 'vot_cli'],
+        ]
         
-        # Способ 2: Проверка python -m vot_cli
-        try:
-            result = subprocess.run([sys.executable, '-m', 'vot_cli', '--version'], 
-                                  capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                self.debug_info.emit(f"Найден vot-cli как модуль: {result.stdout.strip()}")
-                return [sys.executable, '-m', 'vot_cli']
-        except:
-            self.debug_info.emit("vot-cli как модуль не найден")
-        
-        # Способ 3: Поиск в PATH (исправлено для Windows)
-        try:
-            result = subprocess.run(['where', 'vot-cli'], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                # Берем первую строку вывода
-                vot_path = result.stdout.strip().split('\n')[0]
-                self.debug_info.emit(f"Найден vot-cli в PATH: {vot_path}")
-                
-                # Проверяем различные расширения для Windows
-                path_obj = Path(vot_path)
-                possible_extensions = ['.cmd', '.bat', '.exe', '']
-                
-                for ext in possible_extensions:
-                    test_path = path_obj.with_suffix(ext) if ext else path_obj
-                    if test_path.exists():
-                        self.debug_info.emit(f"Найден исполняемый файл: {test_path}")
-                        # Для .cmd и .bat файлов запускаем через cmd.exe
-                        if ext in ['.cmd', '.bat']:
-                            return ['cmd', '/c', str(test_path)]
-                        return [str(test_path)]
-                
-                # Если ни один из вариантов не найден, пробуем искать в родительской директории
-                parent_dir = path_obj.parent
-                for ext in possible_extensions:
-                    test_path = parent_dir / f"{path_obj.name}{ext}"
-                    if test_path.exists():
-                        self.debug_info.emit(f"Найден исполняемый файл: {test_path}")
-                        # Для .cmd и .bat файлов запускаем через cmd.exe
-                        if ext in ['.cmd', '.bat']:
-                            return ['cmd', '/c', str(test_path)]
-                        return [str(test_path)]
-                
-                # Если ничего не найдено, используем оригинальный путь через cmd
-                return ['cmd', '/c', vot_path]
-        except Exception as e:
-            self.debug_info.emit(f"Ошибка при поиске в PATH: {e}")
-        
-        # Способ 4: Поиск в папках Python
-        python_scripts = Path(sys.executable).parent / 'Scripts'
-        possible_names = ['vot-cli.exe', 'vot-cli.cmd', 'vot-cli.bat', 'vot-cli']
-        
-        for name in possible_names:
-            vot_file = python_scripts / name
-            if vot_file.exists():
-                self.debug_info.emit(f"Найден vot-cli в Scripts: {vot_file}")
-                # Для .cmd и .bat файлов запускаем через cmd.exe
-                if name.endswith(('.cmd', '.bat')):
-                    return ['cmd', '/c', str(vot_file)]
-                return [str(vot_file)]
-        
-        # Способ 5: Поиск в AppData\npm (типичное место для npm на Windows)
+        for cmd in possible_cmds:
+            try:
+                result = subprocess.run(cmd + ['--version'], capture_output=True, encoding='utf-8', errors='replace', timeout=5)
+                if result.returncode == 0:
+                    self.debug_info.emit(f"Найден vot-cli: {cmd}")
+                    return cmd
+            except:
+                continue
+
         npm_global = Path(os.environ.get('APPDATA', '')) / 'npm'
-        if npm_global.exists():
-            possible_names = ['vot-cli.exe', 'vot-cli.cmd', 'vot-cli.bat', 'vot-cli']
-            for name in possible_names:
-                vot_file = npm_global / name
-                if vot_file.exists():
-                    self.debug_info.emit(f"Найден vot-cli в npm global: {vot_file}")
-                    # Для .cmd и .bat файлов запускаем через cmd.exe
-                    if name.endswith(('.cmd', '.bat')):
-                        return ['cmd', '/c', str(vot_file)]
-                    return [str(vot_file)]
+        search_paths = [npm_global]
         
-        # Способ 6: Прямой поиск в AppData\npm с проверкой расширений
-        npm_global = Path(os.environ.get('APPDATA', '')) / 'npm'
-        if npm_global.exists():
-            vot_cmd = npm_global / 'vot-cli.cmd'
-            if vot_cmd.exists():
-                self.debug_info.emit(f"Найден vot-cli.cmd в npm global: {vot_cmd}")
-                return ['cmd', '/c', str(vot_cmd)]
-            
-            vot_bat = npm_global / 'vot-cli.bat'
-            if vot_bat.exists():
-                self.debug_info.emit(f"Найден vot-cli.bat в npm global: {vot_bat}")
-                return ['cmd', '/c', str(vot_bat)]
-            
-            vot_exe = npm_global / 'vot-cli.exe'
-            if vot_exe.exists():
-                self.debug_info.emit(f"Найден vot-cli.exe в npm global: {vot_exe}")
-                return [str(vot_exe)]
+        try:
+            res = subprocess.run(['where', 'vot-cli'], capture_output=True, encoding='utf-8', errors='replace')
+            if res.returncode == 0:
+                search_paths.insert(0, Path(res.stdout.split('\n')[0]).parent)
+        except:
+            pass
+
+        for path in search_paths:
+            if not path.exists(): continue
+            for ext in ['.cmd', '.bat', '.exe', '']:
+                f = path / f"vot-cli{ext}"
+                if f.exists():
+                    self.debug_info.emit(f"Найден файл: {f}")
+                    if ext in ['.cmd', '.bat']:
+                        return ['cmd', '/c', str(f)]
+                    return [str(f)]
         
-        self.debug_info.emit("vot-cli не найден ни в одном из мест")
         return None
+
+    def download_progress_hook(self, d):
+        if d['status'] == 'downloading':
+            try:
+                p = d.get('_percent_str', '0%').replace('%','')
+                speed = d.get('_speed_str', 'N/A')
+                self.progress_updated.emit(int(float(p)), f"Скачивание: {p}% ({speed})")
+            except:
+                pass
+        elif d['status'] == 'finished':
+            self.progress_updated.emit(100, "Скачивание завершено, обработка...")
 
     def run(self):
         temp_dir = None
         working_video_path = None
+        
         try:
-            temp_dir = Path('./temp')
+            temp_dir = Path('./temp').resolve()
             temp_audio_dir = temp_dir / 'audio'
+            temp_download_dir = temp_dir / 'video_dl'
             
-            self.progress_updated.emit(10, "Создание временных директорий...")
-            temp_dir.mkdir(exist_ok=True)
+            self.progress_updated.emit(0, "Подготовка рабочих директорий...")
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+            
+            temp_dir.mkdir(parents=True, exist_ok=True)
             temp_audio_dir.mkdir(exist_ok=True)
+            temp_download_dir.mkdir(exist_ok=True)
+
+            # Нормализация ссылки перед использованием
+            original_link = self.video_link
+            self.video_link = self.normalize_url(self.video_link)
+            if original_link != self.video_link:
+                self.debug_info.emit(f"Ссылка преобразована: {original_link} -> {self.video_link}")
             
-            # Копируем видеофайл с уникальным именем
-            self.progress_updated.emit(20, "Копирование видеофайла...")
-            unique_id = str(uuid.uuid4())[:8]
-            safe_filename = f"original_video_{unique_id}.mp4"
-            working_video_path = Path.cwd() / safe_filename
-            
-            self.debug_info.emit(f"Копирование в: {working_video_path}")
-            
-            # Проверяем, не заблокирован ли исходный файл
-            if self.is_file_locked(self.video_path):
-                self.debug_info.emit("Исходный файл заблокирован, ожидаем...")
-                if not self.wait_for_file_unlock(self.video_path):
-                    raise Exception("Не удалось дождаться разблокировки исходного файла")
-            
-            shutil.copy2(self.video_path, working_video_path)
-            self.debug_info.emit(f"Файл успешно скопирован")
-            
-            # Находим vot-cli
+            # --- ЛОГИКА ПОЛУЧЕНИЯ ВИДЕО ---
+            if self.video_path is not None:
+                self.progress_updated.emit(10, "Копирование локального видеофайла...")
+                unique_id = str(uuid.uuid4())[:8]
+                safe_filename = f"original_video_{unique_id}.mp4"
+                working_video_path = Path.cwd() / safe_filename
+                
+                self.debug_info.emit(f"Копирование {self.video_path} -> {working_video_path}")
+                
+                if self.is_file_locked(self.video_path):
+                    if not self.wait_for_file_unlock(self.video_path):
+                        raise Exception("Файл заблокирован")
+                
+                shutil.copy2(self.video_path, working_video_path)
+                
+            else:
+                self.progress_updated.emit(5, "Инициализация скачивания с YouTube...")
+                self.debug_info.emit(f"Скачивание видео: {self.video_link}")
+                
+                ydl_opts = {
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    'outtmpl': str(temp_download_dir / 'downloaded_video.%(ext)s'),
+                    'progress_hooks': [self.download_progress_hook],
+                    'noplaylist': True,
+                    'quiet': True,
+                    'no_warnings': True,
+                    'merge_output_format': 'mp4'
+                }
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([self.video_link])
+                
+                files = list(temp_download_dir.glob('*'))
+                if not files:
+                    raise Exception("Ошибка: Видео не скачалось")
+                
+                downloaded_file = files[0]
+                self.debug_info.emit(f"Видео скачано: {downloaded_file}")
+                
+                unique_id = str(uuid.uuid4())[:8]
+                working_video_path = Path.cwd() / f"downloaded_{unique_id}{downloaded_file.suffix}"
+                shutil.move(str(downloaded_file), str(working_video_path))
+
+            self.debug_info.emit(f"Рабочий файл: {working_video_path}")
+
+            # --- ЛОГИКА ПЕРЕВОДА (VOT-CLI) ---
             self.progress_updated.emit(30, "Поиск vot-cli...")
             vot_cmd = self.find_vot_cli()
             
             if not vot_cmd:
-                raise Exception("""vot-cli не найден! Установите его:
-1. Откройте командную строку
-2. Выполните: npm install -g vot-cli
-3. Или нажмите кнопку "Установить vot-cli" в интерфейсе""")
+                raise Exception("vot-cli не найден! Установите его через npm install -g vot-cli")
             
-            # Переводим аудио через vot-cli
-            self.progress_updated.emit(40, "Начинаем перевод аудио...")
-            cmd = vot_cmd + [self.video_link, '--output', str(temp_audio_dir)]
-            self.debug_info.emit(f"Выполняем команду: {' '.join(cmd)}")
+            self.progress_updated.emit(40, "Запрос перевода (vot-cli)...")
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            abs_audio_path = str(temp_audio_dir)
+            
+            cmd = vot_cmd + [self.video_link, '--output', abs_audio_path]
+            self.debug_info.emit(f"CMD: {' '.join(cmd)}")
+            
+            # Небольшая пауза перед запросом к API
+            time.sleep(1)
+            
+            result = subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=300)
+            
+            clean_stdout = self.clean_console_output(result.stdout)
+            clean_stderr = self.clean_console_output(result.stderr)
+            
+            if clean_stdout:
+                self.debug_info.emit(f"VOT STDOUT:\n{clean_stdout}")
+            if clean_stderr:
+                self.debug_info.emit(f"VOT STDERR:\n{clean_stderr}")
             
             if result.returncode != 0:
-                self.debug_info.emit(f"Ошибка vot-cli: {result.stderr}")
-                raise Exception(f"vot-cli завершился с ошибкой: {result.stderr}")
+                raise Exception(f"Ошибка vot-cli: {clean_stderr if clean_stderr else clean_stdout}")
             
-            self.debug_info.emit(f"vot-cli stdout: {result.stdout}")
-            
-            # Проверяем, есть ли переведенные файлы
             audio_files = list(temp_audio_dir.glob('*'))
             if not audio_files:
-                raise Exception("Переведенные аудиофайлы не найдены")
+                error_msg = clean_stdout if clean_stdout else clean_stderr
+                
+                # Формируем расширенное объяснение ошибки
+                reason = "Неизвестная ошибка"
+                if "Failed to request" in error_msg or "Возникла ошибка" in error_msg:
+                    reason = """
+Яндекс отклонил запрос на перевод. Возможные причины:
+1. ВАШ IP ЗАБЛОКИРОВАН: Яндекс часто банит запросы с VPN или хостингов. Попробуйте сменить IP.
+2. ВИДЕО 18+: Яндекс не переводит видео с возрастными ограничениями.
+3. НЕТ РЕЧИ: В видео отсутствует распознаваемая речь.
+4. ОШИБКА API: Временный сбой на серверах Яндекса.
+"""
+                
+                raise Exception(f"vot-cli отработал, но перевод не получен.\n{reason}\n\nТехнический ответ:\n{error_msg}")
             
-            self.debug_info.emit(f"Найдены аудиофайлы: {[f.name for f in audio_files]}")
-            
-            # Микширование звука через ffmpeg
-            self.progress_updated.emit(70, "Микширование аудио...")
-            # Используем первый найденный аудиофайл вместо маски
             audio_path = str(audio_files[0])
-            self.debug_info.emit(f"Используем аудиофайл: {audio_path}")
-            output_filename = "translated_video.mp4"
+            self.debug_info.emit(f"Аудио перевода получено: {audio_path}")
             
-            # Проверяем наличие ffmpeg
+            # --- СВЕДЕНИЕ (FFMPEG) ---
+            self.progress_updated.emit(70, "Сведение видео и дорожек (ffmpeg)...")
+            output_filename = f"translated_{int(time.time())}.mp4"
+            
             try:
-                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True, timeout=5)
+                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
             except:
-                raise Exception("ffmpeg не найден. Установите его и добавьте в PATH")
+                raise Exception("ffmpeg не найден в системе")
             
             ffmpeg_cmd = [
                 'ffmpeg',
                 '-i', str(working_video_path),
-                '-i', audio_path,  # Используем конкретный файл вместо маски
+                '-i', audio_path,
                 '-c:v', 'copy',
                 '-filter_complex', 
-                f'[0:a] volume={self.volume_ratio} [original]; [original][1:a] amix=inputs=2:duration=longest [audio_out]',
+                f'[0:a] volume={self.volume_ratio} [orig_low]; [orig_low][1:a] amix=inputs=2:duration=longest [mixed_out]',
                 '-map', '0:v',
-                '-map', '[audio_out]',
+                '-map', '[mixed_out]',
+                '-map', '0:a',
+                '-metadata:s:a:0', 'title=Translated / Перевод',
+                '-metadata:s:a:1', 'title=Original / Оригинал',
+                '-disposition:a:0', 'default',
                 '-y', output_filename
             ]
             
-            self.debug_info.emit(f"Выполняем ffmpeg: {' '.join(ffmpeg_cmd)}")
-            subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True, timeout=300)
+            self.debug_info.emit(f"FFMPEG: {' '.join(ffmpeg_cmd)}")
+            subprocess.run(ffmpeg_cmd, check=True, capture_output=True, encoding='utf-8', errors='replace', timeout=300)
             
-            self.progress_updated.emit(90, "Очистка временных файлов...")
-            
-            # Удаляем скопированный видеофайл
+            # --- ОЧИСТКА ---
+            self.progress_updated.emit(90, "Очистка...")
             if working_video_path.exists():
-                try:
-                    working_video_path.unlink()
-                    self.debug_info.emit("Временный видеофайл удален")
-                except Exception as e:
-                    self.debug_info.emit(f"Не удалось удалить временный файл: {e}")
+                try: working_video_path.unlink()
+                except: pass
             
-            # Чистим временные файлы
             if temp_dir.exists():
                 shutil.rmtree(temp_dir)
             
             self.progress_updated.emit(100, "Готово!")
             self.finished.emit(output_filename)
             
-        except subprocess.TimeoutExpired:
-            self.error_occurred.emit("Превышено время выполнения команды")
-        except subprocess.CalledProcessError as e:
-            error_msg = f"Ошибка выполнения команды: {e}\nStdout: {e.stdout}\nStderr: {e.stderr}"
-            self.error_occurred.emit(error_msg)
         except Exception as e:
-            self.error_occurred.emit(str(e))
+            self.error_occurred.emit(self.clean_console_output(str(e)))
         finally:
-            # Чистим временные файлы при ошибке
             if temp_dir and temp_dir.exists():
-                try:
-                    shutil.rmtree(temp_dir)
-                except:
-                    pass
-            # Удаляем рабочий видеофайл, если он остался
-            if working_video_path and working_video_path.exists():
-                try:
-                    working_video_path.unlink()
-                except:
-                    pass
+                try: shutil.rmtree(temp_dir)
+                except: pass
 
 class VideoTranslatorGUI(QMainWindow):
     def __init__(self):
@@ -281,257 +287,159 @@ class VideoTranslatorGUI(QMainWindow):
         self.initUI()
     
     def initUI(self):
-        self.setWindowTitle("Video Translator")
-        self.setGeometry(100, 100, 800, 700)
+        self.setWindowTitle("Video Translator & Downloader")
+        self.setGeometry(100, 100, 800, 750)
         
-        # Центральный виджет
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
         
-        # Группа настроек
-        settings_group = QGroupBox("Настройки")
+        # Настройки
+        settings_group = QGroupBox("Источник и Настройки")
         settings_layout = QVBoxLayout()
         
-        # Выбор файла
+        self.link_label = QLabel("YouTube ссылка (для скачивания и перевода):")
+        self.link_edit = QTextEdit()
+        self.link_edit.setMaximumHeight(50)
+        self.link_edit.setPlaceholderText("Вставьте ссылку сюда...")
+        
         file_layout = QHBoxLayout()
-        self.file_label = QLabel("Файл не выбран")
-        self.file_label.setWordWrap(True)
-        self.select_file_btn = QPushButton("Выбрать видеофайл")
+        self.file_label = QLabel("Локальный файл: Не выбран (будет скачано по ссылке)")
+        self.file_label.setStyleSheet("color: gray;")
+        self.select_file_btn = QPushButton("Выбрать файл")
         self.select_file_btn.clicked.connect(self.select_file)
+        self.clear_file_btn = QPushButton("✕")
+        self.clear_file_btn.setFixedWidth(30)
+        self.clear_file_btn.clicked.connect(self.clear_file)
+        self.clear_file_btn.setEnabled(False)
+        
         file_layout.addWidget(self.file_label)
         file_layout.addWidget(self.select_file_btn)
+        file_layout.addWidget(self.clear_file_btn)
         
-        # Громкость
-        volume_layout = QHBoxLayout()
-        volume_layout.addWidget(QLabel("Громкость оригинала:"))
+        vol_layout = QHBoxLayout()
+        vol_layout.addWidget(QLabel("Громкость оригинала (на дорожке перевода):"))
         self.volume_spinbox = QSpinBox()
         self.volume_spinbox.setRange(0, 100)
-        self.volume_spinbox.setValue(30)
+        self.volume_spinbox.setValue(20)
         self.volume_spinbox.setSuffix("%")
-        volume_layout.addWidget(self.volume_spinbox)
-        volume_layout.addStretch()
+        vol_layout.addWidget(self.volume_spinbox)
+        vol_layout.addStretch()
         
-        # Ссылка на YouTube
-        self.link_label = QLabel("YouTube ссылка:")
-        self.link_edit = QTextEdit()
-        self.link_edit.setMaximumHeight(60)
-        self.link_edit.setPlainText("https://www.youtube.com/watch?v=cizQ70wYZyw")
-        
-        settings_layout.addLayout(file_layout)
-        settings_layout.addLayout(volume_layout)
         settings_layout.addWidget(self.link_label)
         settings_layout.addWidget(self.link_edit)
+        settings_layout.addLayout(file_layout)
+        settings_layout.addLayout(vol_layout)
         settings_group.setLayout(settings_layout)
         
-        # Прогресс бар
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        
-        # Статус
-        self.status_label = QLabel("Готов к работе")
+        self.status_label = QLabel("Введите ссылку или выберите файл")
         self.status_label.setAlignment(Qt.AlignCenter)
         
-        # Кнопка запуска
-        self.start_btn = QPushButton("Начать обработку")
+        self.start_btn = QPushButton("ЗАПУСК")
+        self.start_btn.setMinimumHeight(40)
         self.start_btn.clicked.connect(self.start_processing)
-        self.start_btn.setEnabled(False)
         
-        # Кнопки установки
         install_layout = QHBoxLayout()
-        self.install_vot_btn = QPushButton("Установить vot-cli")
-        self.install_vot_btn.clicked.connect(self.install_vot_cli)
-        self.install_ffmpeg_btn = QPushButton("Установить ffmpeg")
-        self.install_ffmpeg_btn.clicked.connect(self.install_ffmpeg)
-        self.check_deps_btn = QPushButton("Проверить зависимости")
-        self.check_deps_btn.clicked.connect(self.check_dependencies)
-        install_layout.addWidget(self.install_vot_btn)
-        install_layout.addWidget(self.install_ffmpeg_btn)
-        install_layout.addWidget(self.check_deps_btn)
+        self.install_btn = QPushButton("Установить/Обновить vot-cli")
+        self.install_btn.clicked.connect(self.install_deps)
+        install_layout.addWidget(self.install_btn)
         
-        # Лог
-        log_group = QGroupBox("Лог и отладка")
+        log_group = QGroupBox("Лог")
         log_layout = QVBoxLayout()
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         log_layout.addWidget(self.log_text)
         log_group.setLayout(log_layout)
         
-        # Добавляем всё в основной layout
         layout.addWidget(settings_group)
-        layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
+        layout.addWidget(self.progress_bar)
         layout.addWidget(self.start_btn)
         layout.addLayout(install_layout)
         layout.addWidget(log_group)
         
-        # Шрифты
-        font = QFont()
-        font.setPointSize(10)
-        self.file_label.setFont(font)
-        self.status_label.setFont(font)
-        self.start_btn.setFont(font)
-        
-        # Поток для обработки
         self.worker_thread = None
-    
+
     def select_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, 
-            "Выберите видеофайл", 
-            "", 
-            "Video files (*.mp4 *.avi *.mkv *.mov *.webm)"
-        )
-        
-        if file_path:
-            self.video_path = Path(file_path)
-            
-            # Проверяем, не является ли файл временным от предыдущего запуска
-            if self.video_path.name.startswith('original_video_') and self.video_path.name.endswith('.mp4'):
-                QMessageBox.warning(self, "Внимание", 
-                                  "Вы выбрали временный файл от предыдущего запуска.\n"
-                                  "Пожалуйста, выберите исходный видеофайл.")
-                return
-            
+        f, _ = QFileDialog.getOpenFileName(self, "Видеофайл", "", "Video (*.mp4 *.mkv *.avi *.webm)")
+        if f:
+            self.video_path = Path(f)
             self.file_label.setText(f"Файл: {self.video_path.name}")
-            self.start_btn.setEnabled(True)
-            self.log_message(f"Выбран файл: {self.video_path}")
-    
-    def install_vot_cli(self):
+            self.file_label.setStyleSheet("color: black; font-weight: bold;")
+            self.clear_file_btn.setEnabled(True)
+            self.log_message(f"Выбран локальный файл: {f}")
+
+    def clear_file(self):
+        self.video_path = None
+        self.file_label.setText("Локальный файл: Не выбран (будет скачано по ссылке)")
+        self.file_label.setStyleSheet("color: gray;")
+        self.clear_file_btn.setEnabled(False)
+
+    def install_deps(self):
+        self.log_message("Обновление vot-cli...")
         try:
-            self.log_message("Установка vot-cli...")
-            # Исправляем команду установки для npm
-            result = subprocess.run(['npm', 'install', '-g', 'vot-cli'], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
-                self.log_message("vot-cli успешно установлен!")
-                QMessageBox.information(self, "Успех", "vot-cli успешно установлен!")
-            else:
-                self.log_message(f"Ошибка установки: {result.stderr}")
-                QMessageBox.critical(self, "Ошибка", f"Не удалось установить vot-cli: {result.stderr}")
+            command = 'start "" cmd /c "npm install -g vot-cli@latest && echo. && echo SUCCESS! Closing in 3 seconds... && timeout /t 3"'
+            subprocess.Popen(command, shell=True)
+            QMessageBox.information(self, "Инфо", "Запущен процесс обновления.\nОкно закроется автоматически через 3 секунды после завершения.")
         except Exception as e:
-            self.log_message(f"Ошибка установки vot-cli: {e}")
-            QMessageBox.critical(self, "Ошибка", f"Не удалось установить vot-cli: {e}")
-    
-    def install_ffmpeg(self):
-        self.log_message("Для установки ffmpeg скачайте его с https://ffmpeg.org/download.html")
-        self.log_message("Или используйте менеджер пакетов:")
-        self.log_message("winget install ffmpeg")
-        self.log_message("choco install ffmpeg")
-        QMessageBox.information(self, "Установка ffmpeg", 
-                               "Скачайте ffmpeg с https://ffmpeg.org/download.html\n"
-                               "Или установите через winget: winget install ffmpeg")
-    
-    def check_dependencies(self):
-        self.log_message("=== Проверка зависимостей ===")
-        
-        # Проверка vot-cli
-        self.log_message("Проверка vot-cli...")
-        try:
-            result = subprocess.run(['vot-cli', '--version'], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                self.log_message(f"✓ vot-cli найден: {result.stdout.strip()}")
-            else:
-                self.log_message(f"✗ vot-cli ошибка: {result.stderr}")
-        except:
-            self.log_message("✗ vot-cli не найден как команда")
-        
-        try:
-            result = subprocess.run([sys.executable, '-m', 'vot_cli', '--version'], 
-                                  capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                self.log_message(f"✓ vot-cli найден как модуль: {result.stdout.strip()}")
-            else:
-                self.log_message(f"✗ vot-cli модуль ошибка: {result.stderr}")
-        except:
-            self.log_message("✗ vot-cli не найден как модуль")
-        
-        # Проверка ffmpeg
-        self.log_message("Проверка ffmpeg...")
-        try:
-            result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                version = result.stdout.split('\n')[0]
-                self.log_message(f"✓ ffmpeg найден: {version}")
-            else:
-                self.log_message(f"✗ ffmpeg ошибка: {result.stderr}")
-        except:
-            self.log_message("✗ ffmpeg не найден")
-        
-        self.log_message("=== Конец проверки ===")
-    
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def log_message(self, msg):
+        self.log_text.append(msg)
+        sb = self.log_text.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
     def start_processing(self):
-        if not self.video_path:
-            self.log_message("Ошибка: Файл не выбран!")
+        link = self.link_edit.toPlainText().strip()
+        
+        if not link and not self.video_path:
+            QMessageBox.warning(self, "Ошибка", "Укажите ссылку на YouTube или выберите файл!")
             return
             
-        if not self.video_path.exists():
-            self.log_message(f"Ошибка: Файл не найден: {self.video_path}")
+        if not link and self.video_path:
+            QMessageBox.warning(self, "Ошибка", "Для перевода (vot-cli) ОБЯЗАТЕЛЬНО нужна ссылка на YouTube,\nдаже если вы выбрали локальный файл!")
             return
+
+        vol = self.volume_spinbox.value() / 100.0
         
-        video_link = self.link_edit.toPlainText().strip()
-        if not video_link:
-            self.log_message("Ошибка: Укажите ссылку на YouTube!")
-            return
+        mode = "СКАЧИВАНИЕ + ПЕРЕВОД" if self.video_path is None else "ЛОКАЛЬНЫЙ ФАЙЛ + ПЕРЕВОД"
+        self.log_message(f"--- ЗАПУСК: {mode} ---")
         
-        volume_ratio = self.volume_spinbox.value() / 100.0
-        
-        # Блокируем кнопки
         self.start_btn.setEnabled(False)
         self.select_file_btn.setEnabled(False)
         self.progress_bar.setValue(0)
-        self.status_label.setText("Начинаем обработку...")
         
-        self.log_message("Начинаем обработку...")
-        
-        # Создаем и запускаем поток
-        self.worker_thread = WorkerThread(self.video_path, video_link, volume_ratio)
-        self.worker_thread.progress_updated.connect(self.update_progress)
-        self.worker_thread.finished.connect(self.processing_finished)
-        self.worker_thread.error_occurred.connect(self.processing_error)
+        self.worker_thread = WorkerThread(self.video_path, link, vol)
+        self.worker_thread.progress_updated.connect(lambda v, m: (self.progress_bar.setValue(v), self.status_label.setText(m)))
         self.worker_thread.debug_info.connect(self.log_message)
+        self.worker_thread.error_occurred.connect(self.on_error)
+        self.worker_thread.finished.connect(self.on_finished)
         self.worker_thread.start()
-    
-    def update_progress(self, value, message):
-        self.progress_bar.setValue(value)
-        self.status_label.setText(message)
-        self.log_message(message)
-    
-    def processing_finished(self, output_file):
-        self.log_message(f"Готово! Результат: {output_file}")
-        self.status_label.setText("Обработка завершена!")
-        QMessageBox.information(self, "Успех", f"Видео успешно обработано!\nРезультат: {output_file}")
-        
-        # Разблокируем кнопки
+
+    def on_finished(self, filename):
+        self.status_label.setText("Готово!")
+        self.log_message(f"Успешно сохранено: {filename}")
+        QMessageBox.information(self, "Успех", f"Видео готово:\n{filename}\n\nАудиодорожки:\n1. Перевод\n2. Оригинал")
+        self.reset_ui()
+
+    def on_error(self, err):
+        self.status_label.setText("Ошибка")
+        self.log_message(f"ОШИБКА: {err}")
+        QMessageBox.critical(self, "Ошибка", err)
+        self.reset_ui()
+
+    def reset_ui(self):
         self.start_btn.setEnabled(True)
         self.select_file_btn.setEnabled(True)
-    
-    def processing_error(self, error_message):
-        self.log_message(f"ОШИБКА: {error_message}")
-        self.status_label.setText("Произошла ошибка!")
-        self.progress_bar.setValue(0)  # Сбрасываем прогрессбар
-        QMessageBox.critical(self, "Ошибка", f"Произошла ошибка:\n{error_message}")
-        
-        # Разблокируем кнопки
-        self.start_btn.setEnabled(True)
-        self.select_file_btn.setEnabled(True)
-    
-    def log_message(self, message):
-        self.log_text.append(message)
-        # Прокручиваем вниз
-        scrollbar = self.log_text.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-    
+
     def closeEvent(self, event):
-        # Если поток работает, ждем его завершения
         if self.worker_thread and self.worker_thread.isRunning():
-            self.worker_thread.quit()
-            self.worker_thread.wait()
+            self.worker_thread.terminate()
         event.accept()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = VideoTranslatorGUI()
-    window.show()
+    w = VideoTranslatorGUI()
+    w.show()
     sys.exit(app.exec())
