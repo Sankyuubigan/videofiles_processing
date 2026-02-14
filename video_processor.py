@@ -237,3 +237,38 @@ class VideoProcessor:
             progress_callback(100, "Готово!")
             
         return str(output_path)
+
+    def normalize_audio_volume(self, input_path: str,
+                                progress_callback: Optional[Callable] = None,
+                                process_setter: Optional[Callable] = None,
+                                output_dir: Optional[str] = None) -> str:
+        """Метод для нормализации громкости аудио"""
+        logging.debug(f"Starting audio volume normalization: {input_path}")
+        
+        input_p = Path(input_path)
+        
+        if output_dir:
+            output_path = Path(output_dir) / f"{input_p.stem}_volnorm{input_p.suffix}"
+        else:
+            output_path = input_p.with_name(f"{input_p.stem}_volnorm{input_p.suffix}")
+            
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception as e:
+                logging.error(f"Error deleting existing file: {e}")
+        
+        def norm_progress(p, m):
+            progress_callback(p, m) if progress_callback else None
+            
+        success, msg = self.ffmpeg_handler.normalize_audio_volume(
+            input_path, str(output_path), norm_progress, process_setter
+        )
+        
+        if not success:
+            raise Exception(f"Ошибка при нормализации громкости: {msg}")
+            
+        if progress_callback:
+            progress_callback(100, "Готово!")
+            
+        return str(output_path)

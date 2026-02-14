@@ -37,6 +37,13 @@ class WorkerThread(QThread):
                     **self.kwargs
                 )
                 self.finished.emit(result)
+            elif self.mode == 'normalize_audio':
+                result = self.processor.normalize_audio_volume(
+                    progress_callback=self.progress_updated.emit,
+                    process_setter=self.set_process,
+                    **self.kwargs
+                )
+                self.finished.emit(result)
         except Exception as e:
             import traceback
             traceback.print_exc()

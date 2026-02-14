@@ -64,7 +64,7 @@ class MainWindow(QMainWindow):
         
         # Первая вкладка - Основная
         self.main_tab = QWidget()
-        self.tab_widget.addTab(self.main_tab, "Основная")
+        self.tab_widget.addTab(self.main_tab, "Редактор")
         main_tab_layout = QVBoxLayout(self.main_tab)
         
         # Вторая вкладка - Логи
@@ -107,16 +107,20 @@ class MainWindow(QMainWindow):
         queue_group.setLayout(queue_layout)
         main_tab_layout.addWidget(queue_group)
 
-        # Вкладки операций (Сжатие, Сокращение)
+        # Вкладки операций (Сжатие, Сокращение, Починка громкости)
         self.operations_tabs = QTabWidget()
         
         # Вкладка Сжатие
         self.compression_tab = self.create_compression_tab()
-        self.operations_tabs.addTab(self.compression_tab, "Сжатие")
+        self.operations_tabs.addTab(self.compression_tab, "Сжатие видео")
         
         # Вкладка Сокращение
         self.trim_tab = self.create_trim_tab()
         self.operations_tabs.addTab(self.trim_tab, "Сокращение")
+        
+        # Вкладка Починка громкости
+        self.normalize_tab = self.create_normalize_tab()
+        self.operations_tabs.addTab(self.normalize_tab, "Починка громкости")
         
         main_tab_layout.addWidget(self.operations_tabs)
 
@@ -275,6 +279,25 @@ class MainWindow(QMainWindow):
         
         return tab
 
+    def create_normalize_tab(self):
+        """Создает содержимое вкладки 'Починка громкости'"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        
+        info_label = QLabel("Нормализует громкость аудио в два этапа:\n"
+                            "1. Динамическая нормализация (dynaudnorm)\n"
+                            "2. Нормализация громкости по стандарту (loudnorm)")
+        info_label.setStyleSheet("color: gray;")
+        
+        output_label = QLabel("Видео будет сохранено с суффиксом '_volnorm'.")
+        output_label.setStyleSheet("font-weight: bold;")
+        
+        layout.addWidget(info_label)
+        layout.addWidget(output_label)
+        layout.addStretch()
+        
+        return tab
+
     def create_process_group(self):
         process_group = QGroupBox("Запуск обработки")
         process_layout = QVBoxLayout()
@@ -334,11 +357,16 @@ class MainWindow(QMainWindow):
         if os.path.isfile(file_path):
             info = self.processor.get_video_info(file_path)
             if "error" not in info:
-                # Логируем сложность
+                info["is_video"] = info.get("width", 0) > 0 and info.get("height", 0) > 0
+                
                 complexity_score = info.get('complexity_score', 0)
                 complexity_desc = info.get('complexity_desc', 'Не определено')
                 logging.info(f"--- Анализ файла: {os.path.basename(file_path)} ---")
                 logging.info(f"Сложность: {complexity_desc} ({complexity_score}/10)")
+                if not info["is_video"]:
+                    logging.info(f"Тип файла: Аудио")
+                else:
+                    logging.info(f"Тип файла: Видео")
                 logging.info("------------------------------------")
                 
                 self.file_queue.append((file_path, info))
@@ -534,6 +562,10 @@ class MainWindow(QMainWindow):
         self.process_btn.setEnabled(True)
         self._cached_info = file_info
         self.check_vfr_status()
+        
+        is_video = file_info.get("is_video", True)
+        compression_tab_index = 0
+        self.operations_tabs.setTabEnabled(compression_tab_index, is_video)
 
     def current_codec(self):
         return self.codec_combo.currentData()
@@ -648,10 +680,15 @@ class MainWindow(QMainWindow):
         current_tab_index = self.operations_tabs.currentIndex()
         current_tab_text = self.operations_tabs.tabText(current_tab_index)
         
+        is_video = self._cached_info.get("is_video", True) if self._cached_info else True
+        if current_tab_text == "Сжатие видео" and not is_video:
+            QMessageBox.warning(self, "Ошибка", "Сжатие видео недоступно для аудиофайлов!")
+            return
+        
         params = {"input_path": self.current_file, "output_dir": self.output_directory}
         worker_mode = ""
 
-        if current_tab_text == "Сжатие":
+        if current_tab_text == "Сжатие видео":
             worker_mode = "compress"
             params.update({
                 "output_format": self.format_combo.currentData(),
@@ -670,6 +707,10 @@ class MainWindow(QMainWindow):
                 "from_start": self.trim_from_start_radio.isChecked()
             })
             logging.info(f"Начало сокращения файла: {os.path.basename(self.current_file)}")
+
+        elif current_tab_text == "Починка громкости":
+            worker_mode = "normalize_audio"
+            logging.info(f"Начало нормализации громкости файла: {os.path.basename(self.current_file)}")
 
         self.set_ui_enabled(False)
         self.run_processing_worker(worker_mode, **params)

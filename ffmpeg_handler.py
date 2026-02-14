@@ -190,9 +190,11 @@ class FFmpegHandler:
             
             data = json.loads(output_text)
             video_stream = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
-            if not video_stream: 
-                logging.error(f"No video stream found in file")
-                return {"error": "Видеопоток не найден"}
+            audio_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
+            
+            if not video_stream and not audio_streams:
+                logging.error(f"No video or audio stream found in file")
+                return {"error": "Аудиопоток не найден"}
             
             format_info = data.get("format", {})
             duration = float(format_info.get("duration", 0))
@@ -206,29 +208,53 @@ class FFmpegHandler:
             
             size_mb = size_bytes / (1024 * 1024)
             logging.debug(f"get_video_info: File size in MB: {size_mb:.2f} MB")
-            
-            total_bitrate = int(format_info.get("bit_rate", 0))
-            if total_bitrate == 0 and duration > 0:
-                total_bitrate = int((size_bytes * 8) / duration)
-            video_bitrate = int(video_stream.get("bit_rate", 0))
-            if video_bitrate == 0:
-                audio_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
-                audio_bitrate = sum(int(s.get("bit_rate", 128000)) for s in audio_streams) if audio_streams else 128000
-                video_bitrate = max(0, total_bitrate - audio_bitrate)
-                logging.debug(f"get_video_info: Used fallback for video_bitrate. Calculated: {video_bitrate} bit/s")
-            audio_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
+
+            if not video_stream:
+                width = 0
+                height = 0
+                video_bitrate = 0
+                needs_vfr_fix = False
+                is_hevc = False
+                is_10bit = False
+                video_codec = "unknown"
+                pixel_format = "unknown"
+                fps = 0
+            else:
+                width = int(video_stream.get("width", 0))
+                height = int(video_stream.get("height", 0))
+                total_bitrate = int(format_info.get("bit_rate", 0))
+                if total_bitrate == 0 and duration > 0:
+                    total_bitrate = int((size_bytes * 8) / duration)
+                video_bitrate = int(video_stream.get("bit_rate", 0))
+                if video_bitrate == 0:
+                    audio_bitrate = sum(int(s.get("bit_rate", 128000)) for s in audio_streams) if audio_streams else 128000
+                    video_bitrate = max(0, total_bitrate - audio_bitrate)
+                    logging.debug(f"get_video_info: Used fallback for video_bitrate. Calculated: {video_bitrate} bit/s")
+                fps_str = video_stream.get("avg_frame_rate", "0/1")
+                try:
+                    fps_parts = fps_str.split("/")
+                    fps = int(fps_parts[0]) / int(fps_parts[1]) if len(fps_parts) == 2 and int(fps_parts[1]) != 0 else 0
+                except:
+                    fps = 0
+                needs_vfr_fix = video_stream.get("r_frame_rate") in ["1000/1", "0/0"] or fps_str == "0/0"
+                is_hevc = video_stream.get("codec_name", "").lower() in ["hevc", "h265"]
+                is_10bit = video_stream.get("pix_fmt", "").endswith("10le") or video_stream.get("pix_fmt", "").endswith("10be")
+                video_codec = video_stream.get("codec_name", "unknown")
+                pixel_format = video_stream.get("pix_fmt", "unknown")
+
             audio_bitrate = sum(int(s.get("bit_rate", 128000)) for s in audio_streams) if audio_streams else 128000
             
             # Проверяем наличие субтитров
             subtitle_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "subtitle"]
             has_subtitles = len(subtitle_streams) > 0
             
-            logging.debug(f"Video stream info:")
-            logging.debug(f"  Codec: {video_stream.get('codec_name', 'unknown')}")
-            logging.debug(f"  Resolution: {video_stream.get('width', 0)}x{video_stream.get('height', 0)}")
-            logging.debug(f"  Pixel format: {video_stream.get('pix_fmt', 'unknown')}")
-            logging.debug(f"  Frame rate: {video_stream.get('avg_frame_rate', 'unknown')}")
-            logging.debug(f"  Bitrate: {video_bitrate}")
+            if video_stream:
+                logging.debug(f"Video stream info:")
+                logging.debug(f"  Codec: {video_stream.get('codec_name', 'unknown')}")
+                logging.debug(f"  Resolution: {video_stream.get('width', 0)}x{video_stream.get('height', 0)}")
+                logging.debug(f"  Pixel format: {video_stream.get('pix_fmt', 'unknown')}")
+                logging.debug(f"  Frame rate: {video_stream.get('avg_frame_rate', 'unknown')}")
+                logging.debug(f"  Bitrate: {video_bitrate}")
             
             logging.debug(f"Audio streams info:")
             for i, stream in enumerate(audio_streams):
@@ -240,28 +266,20 @@ class FFmpegHandler:
             
             logging.debug(f"Subtitle streams info: {len(subtitle_streams)} found")
             
-            fps_str = video_stream.get("avg_frame_rate", "0/1")
-            num, den = map(int, fps_str.split('/'))
-            fps = num / den if den != 0 else 0
-            needs_vfr_fix = video_stream.get("r_frame_rate") in ["1000/1", "0/0"] or fps_str == "0/0"
-            
-            is_hevc = video_stream.get("codec_name", "").lower() in ["hevc", "h265"]
-            is_10bit = video_stream.get("pix_fmt", "").endswith("10le") or video_stream.get("pix_fmt", "").endswith("10be")
-            
             return {
                 "path": input_path,
                 "duration": duration,
                 "size_mb": size_mb,
                 "video_bitrate": video_bitrate,
                 "audio_bitrate": audio_bitrate,
-                "width": int(video_stream.get("width", 0)),
-                "height": int(video_stream.get("height", 0)),
+                "width": width,
+                "height": height,
                 "fps": fps,
                 "needs_vfr_fix": needs_vfr_fix,
                 "is_hevc": is_hevc,
                 "is_10bit": is_10bit,
-                "video_codec": video_stream.get("codec_name", "unknown"),
-                "pixel_format": video_stream.get("pix_fmt", "unknown"),
+                "video_codec": video_codec,
+                "pixel_format": pixel_format,
                 "has_subtitles": has_subtitles,
                 "audio_tracks": self.get_audio_tracks(input_path)
             }
@@ -694,3 +712,29 @@ class FFmpegHandler:
         logging.debug(f"Trim command: {' '.join(cmd)}")
         
         return self._run_command_with_progress(cmd, progress_callback, duration, "Сокращение", process_setter)
+
+    def normalize_audio_volume(self, input_path: str, output_path: str,
+                                progress_callback: Optional[Callable] = None,
+                                process_setter: Optional[Callable] = None) -> tuple[bool, str]:
+        """
+        Нормализует громкость аудио в два этапа:
+        1. dynaudnorm - динамическая нормализация
+        2. loudnorm - нормализация громкости по стандарту
+        """
+        logging.debug(f"Starting audio volume normalization:")
+        logging.debug(f"  Input: {input_path}")
+        logging.debug(f"  Output: {output_path}")
+
+        cmd = [
+            self.ffmpeg_path, "-y",
+            "-i", input_path,
+            "-af", "dynaudnorm=f=150:m=100:s=12:g=15,loudnorm=I=-16:LRA=11:TP=-1.5",
+            "-c:v", "copy",
+            "-progress", "pipe:1", output_path
+        ]
+        logging.debug(f"Normalize audio command: {' '.join(cmd)}")
+
+        video_info = self.get_video_info(input_path)
+        duration = video_info.get("duration", 0)
+
+        return self._run_command_with_progress(cmd, progress_callback, duration, "Нормализация громкости", process_setter)
