@@ -203,3 +203,6 @@ if __name__ == "__main__":
     window = YoutubeDownloaderApp()
     window.show()
     sys.exit(app.exec())
+
+
+    # python -m pip install -U --pre "yt-dlp[default]"

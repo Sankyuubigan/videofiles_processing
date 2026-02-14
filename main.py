@@ -350,6 +350,7 @@ class MainWindow(QMainWindow):
                 if len(self.file_queue) == 1 and self.current_file is None:
                     self.current_file, self.current_info = self.file_queue.pop(0)
                     self.set_current_file(self.current_file, self.current_info)
+                    self.set_ui_enabled(True) # Убеждаемся, что UI включен
 
     def update_queue_table(self):
         # Показываем текущий файл и файлы из очереди
@@ -486,8 +487,9 @@ class MainWindow(QMainWindow):
                 self.current_file, self.current_info = self.file_queue.pop(0)
                 self.set_current_file(self.current_file, self.current_info)
             else:
-                # Если очередь пуста, сбрасываем UI
-                self.set_ui_enabled(False)
+                # Если очередь пуста, сбрасываем UI но оставляем вкладки активными
+                # Исправлено: set_ui_enabled(True) вместо False, чтобы вкладки работали
+                self.set_ui_enabled(True) 
                 self.file_label.setText("Перетащите файлы сюда или нажмите 'Выбрать'")
                 self.process_btn.setEnabled(False)
                 self.vfr_status_label.setText("Статус VFR: Не определено")
