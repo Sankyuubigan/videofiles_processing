@@ -39,7 +39,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('ffmpeg.exe', '.'), ('ffprobe.exe', '.')],
-    hiddenimports=['PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets'],
+    hiddenimports=[
+        'PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets',
+        'yt_dlp', 'yt_dlp.utils', 'yt_dlp.extractor', 'yt_dlp.postprocessor',
+        'requests', 'urllib3', 'certifi'
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -111,7 +115,8 @@ exe = EXE(
             print("\nℹ️  Примечание:")
             print("   - Все зависимости включены в exe файл")
             print("   - FFmpeg встроен в приложение")
-            print("   - Дополнительная установка не требуется")
+            print("   - yt-dlp устанавливается при первом запуске (вкладка Настройки)")
+            print("   - Для работы YouTube Downloader нажмите 'Установить/Обновить yt-dlp'")
             
             return True
         else:

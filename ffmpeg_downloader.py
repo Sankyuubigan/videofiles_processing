@@ -5,6 +5,7 @@ import tempfile
 import shutil
 from pathlib import Path
 from PySide6.QtWidgets import QMessageBox
+from settings_manager import get_actual_ffmpeg_path, get_ffprobe_path
 
 
 class FFmpegDownloader:
@@ -13,7 +14,10 @@ class FFmpegDownloader:
         
     def check_and_download(self) -> bool:
         """Проверяет наличие FFmpeg и скачивает при необходимости."""
-        if os.path.exists("ffmpeg.exe") and os.path.exists("ffprobe.exe"):
+        ffmpeg_path = get_actual_ffmpeg_path()
+        ffprobe_path = get_ffprobe_path()
+        
+        if os.path.exists(ffmpeg_path) and os.path.exists(ffprobe_path):
             return True
             
         reply = QMessageBox.question(

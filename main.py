@@ -8,16 +8,20 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QMessageBox, QComboBox, QCheckBox, QSlider,
                                QRadioButton, QButtonGroup,
                                QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-                               QTabWidget, QToolButton, QSpinBox)
+                               QTabWidget, QToolButton, QSpinBox, QLineEdit)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 from config import (OUTPUT_FORMATS, CODECS, DEFAULT_OUTPUT_FORMAT_KEY, DEFAULT_CODEC_KEY,
-                   DEFAULT_USE_HARDWARE_ENCODING, TRIMMED_VIDEO_SUFFIX)
+                    DEFAULT_USE_HARDWARE_ENCODING, TRIMMED_VIDEO_SUFFIX)
 from video_processor import VideoProcessor
 from ffmpeg_downloader import FFmpegDownloader
 from dialogs import VideoInfoDialog
 from threads import WorkerThread
 from gui_logger import setup_logging
+from settings_manager import load_settings, save_settings, get_actual_ffmpeg_path, get_ffprobe_path, get_yt_dlp_path
+from yt_dlp_manager import (is_yt_dlp_installed, get_installed_version, 
+                           install_or_update_yt_dlp, ensure_yt_dlp_installed,
+                           add_yt_dlp_to_path)
 
 
 class MainWindow(QMainWindow):
@@ -76,6 +80,16 @@ class MainWindow(QMainWindow):
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         log_tab_layout.addWidget(self.log_text)
+
+        # Третья вкладка - Настройки
+        self.settings_tab = QWidget()
+        self.tab_widget.addTab(self.settings_tab, "Настройки")
+        self.create_settings_tab()
+
+        # Четвертая вкладка - Скачать видео
+        self.download_tab = QWidget()
+        self.tab_widget.addTab(self.download_tab, "Скачать видео")
+        self.create_download_tab()
 
         file_group = self.create_file_group()
         main_tab_layout.addWidget(file_group)
@@ -896,6 +910,316 @@ class MainWindow(QMainWindow):
                 worker.wait(1000)
             event.accept()
 
+    def create_settings_tab(self):
+        layout = QVBoxLayout(self.settings_tab)
+        
+        ffmpeg_group = QGroupBox("FFmpeg")
+        ffmpeg_layout = QVBoxLayout()
+        
+        ffmpeg_path_layout = QHBoxLayout()
+        ffmpeg_path_layout.addWidget(QLabel("Путь к FFmpeg:"))
+        self.ffmpeg_path_input = QLineEdit()
+        self.ffmpeg_path_input.setPlaceholderText("./ (папка с программой)")
+        ffmpeg_path_layout.addWidget(self.ffmpeg_path_input)
+        ffmpeg_browse_btn = QPushButton("Обзор")
+        ffmpeg_browse_btn.clicked.connect(self.browse_ffmpeg_path)
+        ffmpeg_path_layout.addWidget(ffmpeg_browse_btn)
+        ffmpeg_layout.addLayout(ffmpeg_path_layout)
+        
+        self.ffmpeg_status_label = QLabel("Статус: не проверено")
+        self.ffmpeg_status_label.setStyleSheet("color: gray;")
+        ffmpeg_layout.addWidget(self.ffmpeg_status_label)
+        
+        ffmpeg_group.setLayout(ffmpeg_layout)
+        layout.addWidget(ffmpeg_group)
+        
+        ytdlp_group = QGroupBox("yt-dlp")
+        ytdlp_layout = QVBoxLayout()
+        
+        ytdlp_path_layout = QHBoxLayout()
+        ytdlp_path_layout.addWidget(QLabel("Путь к yt-dlp:"))
+        self.ytdlp_path_input = QLineEdit()
+        self.ytdlp_path_input.setPlaceholderText("./yt_dlp")
+        ytdlp_path_layout.addWidget(self.ytdlp_path_input)
+        ytdlp_browse_btn = QPushButton("Обзор")
+        ytdlp_browse_btn.clicked.connect(self.browse_ytdlp_path)
+        ytdlp_path_layout.addWidget(ytdlp_browse_btn)
+        ytdlp_layout.addLayout(ytdlp_path_layout)
+        
+        ytdlp_version_layout = QHBoxLayout()
+        self.ytdlp_status_label = QLabel("Статус: не проверено")
+        self.ytdlp_status_label.setStyleSheet("color: gray;")
+        ytdlp_version_layout.addWidget(self.ytdlp_status_label)
+        ytdlp_version_layout.addStretch()
+        ytdlp_layout.addLayout(ytdlp_version_layout)
+        
+        ytdlp_update_btn = QPushButton("Установить/Обновить yt-dlp")
+        ytdlp_update_btn.clicked.connect(self.update_ytdlp_from_settings)
+        ytdlp_layout.addWidget(ytdlp_update_btn)
+        
+        ytdlp_group.setLayout(ytdlp_layout)
+        layout.addWidget(ytdlp_group)
+        
+        layout.addStretch()
+        
+        save_btn = QPushButton("Сохранить настройки")
+        save_btn.clicked.connect(self.save_settings_from_tab)
+        layout.addWidget(save_btn)
+        
+        self.load_settings_to_tab()
+    
+    def load_settings_to_tab(self):
+        settings = load_settings()
+        self.ffmpeg_path_input.setText(settings.get("ffmpeg_path", "./"))
+        self.ytdlp_path_input.setText(settings.get("yt_dlp_path", "./yt_dlp"))
+        self.check_ffmpeg_status()
+        self.check_ytdlp_status()
+    
+    def browse_ffmpeg_path(self):
+        folder = QFileDialog.getExistingDirectory(self, "Выберите папку с FFmpeg")
+        if folder:
+            self.ffmpeg_path_input.setText(folder)
+    
+    def browse_ytdlp_path(self):
+        folder = QFileDialog.getExistingDirectory(self, "Выберите папку для yt-dlp")
+        if folder:
+            self.ytdlp_path_input.setText(folder)
+    
+    def save_settings_from_tab(self):
+        settings = {
+            "ffmpeg_path": self.ffmpeg_path_input.text().strip() or "./",
+            "yt_dlp_path": self.ytdlp_path_input.text().strip() or "./yt_dlp"
+        }
+        save_settings(settings)
+        self.check_ffmpeg_status()
+        self.check_ytdlp_status()
+        QMessageBox.information(self, "Сохранено", "Настройки сохранены!")
+    
+    def check_ffmpeg_status(self):
+        ffmpeg_path = get_actual_ffmpeg_path()
+        if os.path.exists(ffmpeg_path):
+            self.ffmpeg_status_label.setText(f"Статус: найден ({ffmpeg_path})")
+            self.ffmpeg_status_label.setStyleSheet("color: green;")
+        else:
+            self.ffmpeg_status_label.setText("Статус: не найден")
+            self.ffmpeg_status_label.setStyleSheet("color: red;")
+    
+    def check_ytdlp_status(self):
+        if is_yt_dlp_installed():
+            version = get_installed_version()
+            self.ytdlp_status_label.setText(f"Статус: установлен (версия {version})")
+            self.ytdlp_status_label.setStyleSheet("color: green;")
+        else:
+            self.ytdlp_status_label.setText("Статус: не установлен")
+            self.ytdlp_status_label.setStyleSheet("color: red;")
+    
+    def update_ytdlp_from_settings(self):
+        self.ytdlp_status_label.setText("Статус: установка/обновление...")
+        self.ytdlp_status_label.setStyleSheet("color: orange;")
+        
+        def log_callback(msg):
+            self.ytdlp_status_label.setText(f"Статус: {msg}")
+            QApplication.processEvents()
+        
+        success, msg = install_or_update_yt_dlp(callback=log_callback)
+        if success:
+            version = get_installed_version()
+            self.ytdlp_status_label.setText(f"Статус: установлен (версия {version})")
+            self.ytdlp_status_label.setStyleSheet("color: green;")
+            QMessageBox.information(self, "Успех", f"yt-dlp успешно установлен/обновлен!\nВерсия: {version}")
+        else:
+            self.ytdlp_status_label.setText(f"Статус: ошибка - {msg}")
+            self.ytdlp_status_label.setStyleSheet("color: red;")
+            QMessageBox.warning(self, "Ошибка", f"Не удалось установить yt-dlp:\n{msg}")
+
+    def create_download_tab(self):
+        layout = QVBoxLayout(self.download_tab)
+        
+        url_layout = QHBoxLayout()
+        url_layout.addWidget(QLabel("URL видео:"))
+        self.youtube_url_input = QLineEdit()
+        self.youtube_url_input.setPlaceholderText("https://www.youtube.com/watch?v=...")
+        url_layout.addWidget(self.youtube_url_input)
+        layout.addLayout(url_layout)
+        
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel("Сохранить в:"))
+        self.download_path_input = QLineEdit()
+        self.download_path_input.setText(os.getcwd())
+        path_layout.addWidget(self.download_path_input)
+        download_browse_btn = QPushButton("Обзор")
+        download_browse_btn.clicked.connect(self.browse_download_path)
+        path_layout.addWidget(download_browse_btn)
+        layout.addLayout(path_layout)
+        
+        self.download_btn = QPushButton("Скачать")
+        self.download_btn.setMinimumHeight(40)
+        self.download_btn.clicked.connect(self.start_youtube_download)
+        layout.addWidget(self.download_btn)
+        
+        self.download_progress_bar = QProgressBar()
+        layout.addWidget(self.download_progress_bar)
+        
+        self.download_status_label = QLabel("Ожидание...")
+        self.download_status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.download_status_label)
+        
+        log_label = QLabel("Лог:")
+        layout.addWidget(log_label)
+        
+        self.download_log = QTextEdit()
+        self.download_log.setReadOnly(True)
+        self.download_log.setStyleSheet("background-color: #1e1e1e; color: #00ff00; font-family: Consolas;")
+        layout.addWidget(self.download_log)
+    
+    def browse_download_path(self):
+        folder = QFileDialog.getExistingDirectory(self, "Выберите папку для сохранения")
+        if folder:
+            self.download_path_input.setText(folder)
+    
+    def start_youtube_download(self):
+        url = self.youtube_url_input.text().strip()
+        if not url:
+            QMessageBox.warning(self, "Ошибка", "Введите URL видео!")
+            return
+        
+        add_yt_dlp_to_path()
+        
+        if not is_yt_dlp_installed():
+            reply = QMessageBox.question(
+                self, "yt-dlp не установлен",
+                "yt-dlp не найден. Установить сейчас?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                success, msg = install_or_update_yt_dlp()
+                if not success:
+                    QMessageBox.critical(self, "Ошибка", f"Не удалось установить yt-dlp:\n{msg}")
+                    return
+            else:
+                return
+        
+        self.download_btn.setEnabled(False)
+        self.youtube_url_input.setEnabled(False)
+        self.download_progress_bar.setValue(0)
+        self.download_log.clear()
+        
+        self.download_worker = YoutubeDownloadWorker(url, self.download_path_input.text())
+        self.download_worker.progress_signal.connect(self.download_status_label.setText)
+        self.download_worker.percent_signal.connect(self.download_progress_bar.setValue)
+        self.download_worker.log_signal.connect(self.append_download_log)
+        self.download_worker.finished_signal.connect(self.on_download_finished)
+        self.download_worker.error_signal.connect(self.on_download_error)
+        self.download_worker.start()
+    
+    def append_download_log(self, msg):
+        self.download_log.append(msg)
+        sb = self.download_log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+    
+    def on_download_finished(self):
+        self.download_status_label.setText("Готово!")
+        self.download_log.append("\n--- УСПЕШНО ЗАВЕРШЕНО ---")
+        QMessageBox.information(self, "Успех", "Видео успешно скачано!")
+        self.download_btn.setEnabled(True)
+        self.youtube_url_input.setEnabled(True)
+    
+    def on_download_error(self, err_msg):
+        self.download_status_label.setText("Ошибка")
+        self.download_log.append(f"\n--- ОШИБКА ---\n{err_msg}")
+        QMessageBox.critical(self, "Ошибка", f"Смотрите детали в логах.\n{err_msg}")
+        self.download_btn.setEnabled(True)
+        self.youtube_url_input.setEnabled(True)
+
+
+class YoutubeDownloadWorker(QThread):
+    progress_signal = Signal(str)
+    percent_signal = Signal(int)
+    finished_signal = Signal()
+    error_signal = Signal(str)
+    log_signal = Signal(str)
+    
+    def __init__(self, url, path):
+        super().__init__()
+        self.url = url
+        self.path = path
+    
+    def run(self):
+        import sys
+        from settings_manager import get_yt_dlp_path
+        yt_path = get_yt_dlp_path()
+        if yt_path not in sys.path:
+            sys.path.insert(0, yt_path)
+        
+        import yt_dlp
+        
+        ydl_opts = {
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'outtmpl': os.path.join(self.path, '%(title)s.%(ext)s'),
+            'progress_hooks': [self.progress_hook],
+            'noplaylist': True,
+            'socket_timeout': 60,
+            'retries': 20,
+            'fragment_retries': 20,
+            'ignoreerrors': True,
+            'quiet': True,
+            'no_warnings': True,
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                self.log_signal.emit("--- Анализ видео и получение прямых ссылок ---")
+                
+                info = ydl.extract_info(self.url, download=False)
+                
+                title = info.get('title', 'Video')
+                self.log_signal.emit(f"Название: {title}")
+                
+                if 'requested_formats' in info:
+                    for f in info['requested_formats']:
+                        ftype = "ВИДЕО" if f.get('vcodec') != 'none' else "АУДИО"
+                        note = f.get('format_note', 'unknown')
+                        direct_url = f.get('url', 'нет ссылки')
+                        
+                        self.log_signal.emit(f"\n[{ftype}] Качество: {note}")
+                        self.log_signal.emit(f"SOURCE URL: {direct_url}")
+                
+                elif 'url' in info:
+                    self.log_signal.emit(f"\n[ФАЙЛ] Прямая ссылка:")
+                    self.log_signal.emit(f"SOURCE URL: {info['url']}")
+                
+                self.log_signal.emit("\n--- Начало загрузки ---")
+                
+                ydl.download([self.url])
+            
+            self.finished_signal.emit()
+            
+        except Exception as e:
+            self.error_signal.emit(str(e))
+    
+    def progress_hook(self, d):
+        if d['status'] == 'downloading':
+            try:
+                total = d.get('total_bytes') or d.get('total_bytes_estimate')
+                downloaded = d.get('downloaded_bytes', 0)
+                
+                if total:
+                    percent = int(downloaded / total * 100)
+                    self.percent_signal.emit(percent)
+                    
+                    speed = d.get('speed', 0)
+                    if speed:
+                        speed_mb = speed / 1024 / 1024
+                        self.progress_signal.emit(f"Скачивание: {percent}% ({speed_mb:.1f} MB/s)")
+                    else:
+                        self.progress_signal.emit(f"Скачивание: {percent}%")
+            except Exception:
+                pass
+        elif d['status'] == 'finished':
+            self.percent_signal.emit(100)
+            self.progress_signal.emit("Обработка (ffmpeg)...")
+            self.log_signal.emit("Загрузка завершена. Идет склейка (если нужно)...")
+
 
 def main():
     app = QApplication(sys.argv)
@@ -914,7 +1238,9 @@ def main():
         logging.info("-> Аппаратное кодирование не обнаружено. Сжатие будет выполняться на процессоре (CPU).")
     logging.info("------------------------------------\n")
 
-    if not os.path.exists("ffmpeg.exe") or not os.path.exists("ffprobe.exe"):
+    ffmpeg_path = get_actual_ffmpeg_path()
+    ffprobe_path = get_ffprobe_path()
+    if not os.path.exists(ffmpeg_path) or not os.path.exists(ffprobe_path):
         downloader = FFmpegDownloader()
         if not downloader.check_and_download():
             logging.critical("Критическая ошибка: FFmpeg не найден и не может быть скачан. Приложение будет закрыто.")

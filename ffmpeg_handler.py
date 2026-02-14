@@ -9,15 +9,16 @@ import logging
 from pathlib import Path
 from typing import Optional, Callable, List, Dict, Tuple
 from config import (TEMP_FIXED_VIDEO_SUFFIX, COMPRESSED_VIDEO_SUFFIX, 
-                    DEFAULT_FPS_FIX, FFMPEG_PATH, FFPROBE_PATH)
+                    DEFAULT_FPS_FIX)
+from settings_manager import get_actual_ffmpeg_path, get_ffprobe_path
 
 
 class FFmpegHandler:
     """Класс для работы с FFmpeg"""
     
     def __init__(self):
-        self.ffmpeg_path = FFMPEG_PATH
-        self.ffprobe_path = FFPROBE_PATH
+        self.ffmpeg_path = get_actual_ffmpeg_path()
+        self.ffprobe_path = get_ffprobe_path()
     
     def _get_platform_specific_startupinfo(self):
         if platform.system() == "Windows":
