@@ -8,7 +8,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('ffmpeg.exe', '.'), ('ffprobe.exe', '.')],
-    hiddenimports=['PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets'],
+    hiddenimports=[
+        'PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets',
+        'yt_dlp', 'yt_dlp.utils', 'yt_dlp.extractor', 'yt_dlp.postprocessor',
+        'requests', 'urllib3', 'certifi'
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

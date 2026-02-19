@@ -2,19 +2,31 @@ import os
 import sys
 import subprocess
 import shutil
+import logging
+import importlib.util
 from settings_manager import get_yt_dlp_path
+
+logger = logging.getLogger(__name__)
 
 def get_yt_dlp_dir():
     return get_yt_dlp_path()
 
+def get_yt_dlp_bin_dir():
+    yt_path = get_yt_dlp_dir()
+    return os.path.join(yt_path, "bin")
+
 def is_yt_dlp_installed():
     yt_path = get_yt_dlp_dir()
-    yt_dlp_exe = os.path.join(yt_path, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
-    return os.path.exists(yt_dlp_exe)
+    bin_path = get_yt_dlp_bin_dir()
+    yt_dlp_exe = os.path.join(bin_path, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+    exists = os.path.exists(yt_dlp_exe)
+    logger.info(f"Проверка yt-dlp: путь={yt_dlp_exe}, существует={exists}")
+    return exists
 
 def get_installed_version():
     yt_path = get_yt_dlp_dir()
-    yt_dlp_exe = os.path.join(yt_path, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+    bin_path = get_yt_dlp_bin_dir()
+    yt_dlp_exe = os.path.join(bin_path, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
     
     if not os.path.exists(yt_dlp_exe):
         return None
@@ -32,6 +44,18 @@ def get_installed_version():
         pass
     return None
 
+def get_python_executable():
+    if getattr(sys, 'frozen', False):
+        python_exe = shutil.which('python')
+        if python_exe:
+            return python_exe
+        if os.name == 'nt':
+            python_exe = os.path.join(sys.prefix, 'python.exe')
+            if os.path.exists(python_exe):
+                return python_exe
+        return sys.executable
+    return sys.executable
+
 def install_or_update_yt_dlp(callback=None):
     yt_path = get_yt_dlp_dir()
     os.makedirs(yt_path, exist_ok=True)
@@ -39,7 +63,8 @@ def install_or_update_yt_dlp(callback=None):
     if callback:
         callback("Создание папки для yt-dlp...")
     
-    pip_path = sys.executable
+    pip_path = get_python_executable()
+    logger.info(f"Используем Python: {pip_path}")
     
     cmd = [
         pip_path, "-m", "pip", "install",
@@ -92,7 +117,11 @@ def add_yt_dlp_to_path():
     yt_path = get_yt_dlp_dir()
     if yt_path not in sys.path:
         sys.path.insert(0, yt_path)
+    bin_path = get_yt_dlp_bin_dir()
+    if bin_path not in sys.path:
+        sys.path.insert(0, bin_path)
 
 def get_yt_dlp_exe_path():
     yt_path = get_yt_dlp_dir()
-    return os.path.join(yt_path, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+    bin_path = get_yt_dlp_bin_dir()
+    return os.path.join(bin_path, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")

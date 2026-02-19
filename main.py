@@ -21,7 +21,7 @@ from gui_logger import setup_logging
 from settings_manager import load_settings, save_settings, get_actual_ffmpeg_path, get_ffprobe_path, get_yt_dlp_path
 from yt_dlp_manager import (is_yt_dlp_installed, get_installed_version, 
                            install_or_update_yt_dlp, ensure_yt_dlp_installed,
-                           add_yt_dlp_to_path)
+                           add_yt_dlp_to_path, get_yt_dlp_bin_dir)
 
 
 class MainWindow(QMainWindow):
@@ -1052,6 +1052,9 @@ class MainWindow(QMainWindow):
         path_layout.addWidget(download_browse_btn)
         layout.addLayout(path_layout)
         
+        self.audio_only_checkbox = QCheckBox("Только аудио (mp3)")
+        layout.addWidget(self.audio_only_checkbox)
+        
         self.download_btn = QPushButton("Скачать")
         self.download_btn.setMinimumHeight(40)
         self.download_btn.clicked.connect(self.start_youtube_download)
@@ -1104,7 +1107,11 @@ class MainWindow(QMainWindow):
         self.download_progress_bar.setValue(0)
         self.download_log.clear()
         
-        self.download_worker = YoutubeDownloadWorker(url, self.download_path_input.text())
+        audio_only = self.audio_only_checkbox.isChecked()
+        self.append_download_log(f"Путь к yt-dlp: {get_yt_dlp_path()}")
+        self.append_download_log(f"Режим: {'Только аудио' if audio_only else 'Видео + аудио'}")
+        
+        self.download_worker = YoutubeDownloadWorker(url, self.download_path_input.text(), audio_only)
         self.download_worker.progress_signal.connect(self.download_status_label.setText)
         self.download_worker.percent_signal.connect(self.download_progress_bar.setValue)
         self.download_worker.log_signal.connect(self.append_download_log)
@@ -1139,23 +1146,35 @@ class YoutubeDownloadWorker(QThread):
     error_signal = Signal(str)
     log_signal = Signal(str)
     
-    def __init__(self, url, path):
+    def __init__(self, url, path, audio_only=False):
         super().__init__()
         self.url = url
         self.path = path
+        self.audio_only = audio_only
     
     def run(self):
         import sys
         from settings_manager import get_yt_dlp_path
+        from yt_dlp_manager import get_yt_dlp_bin_dir
         yt_path = get_yt_dlp_path()
+        bin_path = get_yt_dlp_bin_dir()
         if yt_path not in sys.path:
             sys.path.insert(0, yt_path)
+        if bin_path not in sys.path:
+            sys.path.insert(0, bin_path)
         
         import yt_dlp
         
+        if self.audio_only:
+            format_str = 'bestaudio[ext=m4a]/bestaudio/best'
+            outtmpl = os.path.join(self.path, '%(title)s.%(ext)s')
+        else:
+            format_str = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+            outtmpl = os.path.join(self.path, '%(title)s.%(ext)s')
+        
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'outtmpl': os.path.join(self.path, '%(title)s.%(ext)s'),
+            'format': format_str,
+            'outtmpl': outtmpl,
             'progress_hooks': [self.progress_hook],
             'noplaylist': True,
             'socket_timeout': 60,
@@ -1165,6 +1184,13 @@ class YoutubeDownloadWorker(QThread):
             'quiet': True,
             'no_warnings': True,
         }
+        
+        if self.audio_only:
+            ydl_opts['postprocessors'] = [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }]
         
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
