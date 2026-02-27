@@ -20,15 +20,19 @@ def setup_logging(log_signal):
     """
     Configures the root logger to use the QtHandler.
     """
+    logger = logging.getLogger()
+    
+    # Очищаем старые обработчики, чтобы логи не дублировались
+    if logger.hasHandlers():
+        logger.handlers.clear()
+        
+    # Устанавливаем уровень INFO, чтобы скрыть мусорный DEBUG от yt-dlp
+    logger.setLevel(logging.INFO) 
+    
     qt_handler = QtHandler()
     qt_handler.log_signal.connect(log_signal)
-    
-    # Add the handler to the root logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG) # Capture all levels of logs
     logger.addHandler(qt_handler)
     
-    # Also keep logging to console for debugging purposes
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
     logger.addHandler(console_handler)

@@ -125,3 +125,98 @@ def get_yt_dlp_exe_path():
     yt_path = get_yt_dlp_dir()
     bin_path = get_yt_dlp_bin_dir()
     return os.path.join(bin_path, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+
+def get_deno_path():
+    if os.name == "nt":
+        return os.path.join(os.getcwd(), "deno", "deno.exe")
+    return os.path.join(os.getcwd(), "deno", "deno")
+
+def is_deno_installed():
+    deno_path = get_deno_path()
+    exists = os.path.exists(deno_path)
+    if exists:
+        try:
+            result = subprocess.run(
+                [deno_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                logger.info(f"Deno found: {result.stdout.strip()}")
+                return True
+        except Exception as e:
+            logger.warning(f"Deno found but failed to run: {e}")
+    logger.info(f"Deno not found at: {deno_path}")
+    return False
+
+def install_deno(callback=None):
+    import urllib.request
+    import zipfile
+    import io
+    
+    deno_dir = os.path.join(os.getcwd(), "deno")
+    os.makedirs(deno_dir, exist_ok=True)
+    
+    deno_path = get_deno_path()
+    
+    if callback:
+        callback("Скачивание Deno...")
+    
+    try:
+        if os.name == "nt":
+            url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
+        else:
+            import platform
+            system = platform.system().lower()
+            arch = platform.machine().lower()
+            if system == "darwin":
+                url = f"https://github.com/denoland/deno/releases/latest/download/deno-{arch}-apple-darwin.zip"
+            else:
+                url = f"https://github.com/denoland/deno/releases/latest/download/deno-{arch}-unknown-linux-gnu.zip"
+        
+        logger.info(f"Downloading deno from: {url}")
+        
+        def reporthook(block_num, block_size, total_size):
+            if callback and total_size > 0:
+                percent = min(100, int(block_num * block_size * 100 / total_size))
+                callback(f"Скачивание Deno... {percent}%")
+        
+        temp_zip = os.path.join(deno_dir, "deno.zip")
+        urllib.request.urlretrieve(url, temp_zip, reporthook)
+        
+        if callback:
+            callback("Распаковка Deno...")
+        
+        with zipfile.ZipFile(temp_zip, 'r') as z:
+            z.extractall(deno_dir)
+        
+        os.remove(temp_zip)
+        
+        os.chmod(deno_path, 0o755)
+        
+        result = subprocess.run(
+            [deno_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if callback:
+            callback(f"Deno установлен: {result.stdout.strip()}")
+        
+        logger.info(f"Deno installed successfully: {result.stdout.strip()}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to install deno: {e}")
+        if callback:
+            callback(f"Ошибка установки Deno: {str(e)}")
+        return False
+
+def ensure_deno_installed(callback=None):
+    if not is_deno_installed():
+        if callback:
+            callback("Deno не найден. Установка...")
+        return install_deno(callback)
+    return True

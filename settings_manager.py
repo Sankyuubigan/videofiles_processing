@@ -72,3 +72,17 @@ def get_yt_dlp_path():
     if os.path.isabs(yt_path):
         return yt_path
     return os.path.join(BASE_DIR, yt_path)
+
+def get_user_data_dir():
+    user_data_path = os.path.join(BASE_DIR, "user_data")
+    os.makedirs(user_data_path, exist_ok=True)
+    return user_data_path
+
+def get_cookies_path():
+    return os.path.join(get_user_data_dir(), "cookies_youtube.txt")
+
+def is_authenticated():
+    cookies_path = get_cookies_path()
+    if os.path.exists(cookies_path):
+        return os.path.getsize(cookies_path) > 0
+    return False

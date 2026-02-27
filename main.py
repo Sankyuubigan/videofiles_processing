@@ -1,6 +1,7 @@
 import sys
 import os
 import logging
+import json
 from datetime import datetime
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QPushButton, QLabel, QFileDialog,
@@ -8,8 +9,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QMessageBox, QComboBox, QCheckBox, QSlider,
                                QRadioButton, QButtonGroup,
                                QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-                               QTabWidget, QToolButton, QSpinBox, QLineEdit)
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+                               QTabWidget, QToolButton, QSpinBox, QLineEdit, QFrame)
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QUrl
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent
 from config import (OUTPUT_FORMATS, CODECS, DEFAULT_OUTPUT_FORMAT_KEY, DEFAULT_CODEC_KEY,
                     DEFAULT_USE_HARDWARE_ENCODING, TRIMMED_VIDEO_SUFFIX)
@@ -18,10 +19,11 @@ from ffmpeg_downloader import FFmpegDownloader
 from dialogs import VideoInfoDialog
 from threads import WorkerThread
 from gui_logger import setup_logging
-from settings_manager import load_settings, save_settings, get_actual_ffmpeg_path, get_ffprobe_path, get_yt_dlp_path
+from settings_manager import load_settings, save_settings, get_actual_ffmpeg_path, get_ffprobe_path, get_yt_dlp_path, get_cookies_path
 from yt_dlp_manager import (is_yt_dlp_installed, get_installed_version, 
                            install_or_update_yt_dlp, ensure_yt_dlp_installed,
-                           add_yt_dlp_to_path, get_yt_dlp_bin_dir)
+                           add_yt_dlp_to_path, get_yt_dlp_bin_dir,
+                           ensure_deno_installed, is_deno_installed, get_deno_path)
 
 
 class MainWindow(QMainWindow):
@@ -31,11 +33,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.processor = VideoProcessor()
-        self.file_queue = []  # Список кортежей (путь, информация_о_файле)
+        self.file_queue =[]  # Список кортежей (путь, информация_о_файле)
         self.current_file = None
         self.current_info = None
         self.compression_worker = None
-        self.active_workers = []
+        self.active_workers =[]
         self._cached_info = None
         self.processing_stopped = False  # Флаг для остановки всей очереди
         
@@ -100,19 +102,14 @@ class MainWindow(QMainWindow):
         
         # Создаем таблицу для очереди файлов
         self.queue_table = QTableWidget()
-        self.queue_table.setColumnCount(8) # Увеличено до 8 столбцов (добавляем кнопки)
+        self.queue_table.setColumnCount(8)
         self.queue_table.setHorizontalHeaderLabels([
             "Имя файла", "Размер", "Длительность", "Статус VFR", 
             "Сложность", "Примерный размер", "Время сжатия", "Действия"
         ])
         self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.queue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.queue_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.queue_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.queue_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.queue_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.queue_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        self.queue_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        for i in range(1, 8):
+            self.queue_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.queue_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.queue_table.setAlternatingRowColors(True)
@@ -124,15 +121,12 @@ class MainWindow(QMainWindow):
         # Вкладки операций (Сжатие, Сокращение, Починка громкости)
         self.operations_tabs = QTabWidget()
         
-        # Вкладка Сжатие
         self.compression_tab = self.create_compression_tab()
         self.operations_tabs.addTab(self.compression_tab, "Сжатие видео")
         
-        # Вкладка Сокращение
         self.trim_tab = self.create_trim_tab()
         self.operations_tabs.addTab(self.trim_tab, "Сокращение")
         
-        # Вкладка Починка громкости
         self.normalize_tab = self.create_normalize_tab()
         self.operations_tabs.addTab(self.normalize_tab, "Починка громкости")
         
@@ -153,7 +147,6 @@ class MainWindow(QMainWindow):
         self.select_file_btn = QPushButton("Выбрать файл(ы)")
         self.select_file_btn.clicked.connect(self.select_files)
         
-        # Кнопка выбора пути сохранения
         self.output_dir_btn = QPushButton("Путь сохранения")
         self.output_dir_btn.clicked.connect(self.select_output_directory)
         self.output_dir_btn.setToolTip("Выбрать папку для сохранения сжатых файлов")
@@ -165,7 +158,6 @@ class MainWindow(QMainWindow):
         file_select_layout.addStretch()
         file_layout.addLayout(file_select_layout)
         
-        # Метка с путем сохранения
         output_path_layout = QHBoxLayout()
         output_path_layout.addWidget(QLabel("Путь сохранения:"))
         output_path_layout.addWidget(self.output_dir_label)
@@ -179,11 +171,9 @@ class MainWindow(QMainWindow):
         return file_group
 
     def create_compression_tab(self):
-        """Создает содержимое вкладки 'Сжатие'"""
         tab = QWidget()
         settings_layout = QVBoxLayout(tab)
         
-        # Выбор формата
         format_layout = QHBoxLayout()
         format_layout.addWidget(QLabel("Формат:"))
         self.format_combo = QComboBox()
@@ -194,7 +184,6 @@ class MainWindow(QMainWindow):
         format_layout.addWidget(self.format_combo)
         format_layout.addStretch()
         
-        # Выбор кодека
         codec_layout = QHBoxLayout()
         codec_layout.addWidget(QLabel("Кодек:"))
         self.codec_combo = QComboBox()
@@ -203,7 +192,6 @@ class MainWindow(QMainWindow):
         codec_layout.addWidget(self.codec_combo)
         codec_layout.addStretch()
         
-        # Выбор типа кодирования
         encoding_layout = QHBoxLayout()
         encoding_layout.addWidget(QLabel("Тип кодирования:"))
         self.encoding_group = QButtonGroup(self)
@@ -220,7 +208,6 @@ class MainWindow(QMainWindow):
         encoding_layout.addWidget(self.software_radio)
         encoding_layout.addStretch()
         
-        # Выбор пресета
         preset_layout = QHBoxLayout()
         preset_layout.addWidget(QLabel("Пресет:"))
         self.preset_combo = QComboBox()
@@ -229,7 +216,6 @@ class MainWindow(QMainWindow):
         preset_layout.addWidget(self.preset_combo)
         preset_layout.addStretch()
         
-        # Настройка CRF
         crf_layout = QHBoxLayout()
         self.crf_label = QLabel("CRF: ")
         self.crf_slider = QSlider(Qt.Horizontal)
@@ -237,7 +223,6 @@ class MainWindow(QMainWindow):
         crf_layout.addWidget(self.crf_label)
         crf_layout.addWidget(self.crf_slider)
         
-        # Настройка VFR
         vfr_layout = QHBoxLayout()
         self.vfr_checkbox = QCheckBox("Принудительная починка VFR")
         self.vfr_status_label = QLabel("Статус VFR: Не определено")
@@ -255,21 +240,18 @@ class MainWindow(QMainWindow):
         return tab
 
     def create_trim_tab(self):
-        """Создает содержимое вкладки 'Сокращение'"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
-        # Настройка количества секунд
         seconds_layout = QHBoxLayout()
         seconds_layout.addWidget(QLabel("Количество секунд для удаления:"))
         self.trim_seconds_spin = QSpinBox()
-        self.trim_seconds_spin.setRange(1, 3600) # От 1 секунды до 1 часа
+        self.trim_seconds_spin.setRange(1, 3600)
         self.trim_seconds_spin.setValue(10)
         self.trim_seconds_spin.setSuffix(" сек")
         seconds_layout.addWidget(self.trim_seconds_spin)
         seconds_layout.addStretch()
         
-        # Выбор откуда удалять
         position_layout = QHBoxLayout()
         position_layout.addWidget(QLabel("Удалять с:"))
         self.trim_position_group = QButtonGroup(self)
@@ -277,7 +259,7 @@ class MainWindow(QMainWindow):
         self.trim_from_start_radio = QRadioButton("Начала")
         self.trim_position_group.addButton(self.trim_from_end_radio)
         self.trim_position_group.addButton(self.trim_from_start_radio)
-        self.trim_from_end_radio.setChecked(True) # По умолчанию с конца
+        self.trim_from_end_radio.setChecked(True)
         
         position_layout.addWidget(self.trim_from_end_radio)
         position_layout.addWidget(self.trim_from_start_radio)
@@ -294,7 +276,6 @@ class MainWindow(QMainWindow):
         return tab
 
     def create_normalize_tab(self):
-        """Создает содержимое вкладки 'Починка громкости'"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
@@ -316,9 +297,8 @@ class MainWindow(QMainWindow):
         process_group = QGroupBox("Запуск обработки")
         process_layout = QVBoxLayout()
         
-        # Кнопки управления процессом
         buttons_layout = QHBoxLayout()
-        self.process_btn = QPushButton("Начать обработку") # Переименовал кнопку
+        self.process_btn = QPushButton("Начать обработку")
         self.process_btn.clicked.connect(self.start_processing)
         self.process_btn.setEnabled(False)
         
@@ -388,15 +368,13 @@ class MainWindow(QMainWindow):
                 self.update_queue_label()
                 logging.info(f"Файл добавлен в очередь: {file_path}")
                 
-                # Если это первый файл и нет текущего, устанавливаем его как текущий
                 if len(self.file_queue) == 1 and self.current_file is None:
                     self.current_file, self.current_info = self.file_queue.pop(0)
                     self.set_current_file(self.current_file, self.current_info)
-                    self.set_ui_enabled(True) # Убеждаемся, что UI включен
+                    self.set_ui_enabled(True)
 
     def update_queue_table(self):
-        # Показываем текущий файл и файлы из очереди
-        all_files = []
+        all_files =[]
         if self.current_file:
             all_files.append((self.current_file, self.current_info))
         all_files.extend(self.file_queue)
@@ -417,7 +395,6 @@ class MainWindow(QMainWindow):
             size_item = QTableWidgetItem(f"{size_mb:.1f} МБ")
             self.queue_table.setItem(row, 1, size_item)
             
-            # Длительность
             duration = info.get("duration", 0)
             duration_formatted = self.processor.size_estimator.format_duration(duration)
             duration_item = QTableWidgetItem(duration_formatted)
@@ -432,7 +409,6 @@ class MainWindow(QMainWindow):
                 vfr_item.setForeground(Qt.GlobalColor.darkGreen)
             self.queue_table.setItem(row, 3, vfr_item)
             
-            # Сложность
             complexity_desc = info.get('complexity_desc', 'Не определено')
             complexity_item = QTableWidgetItem(complexity_desc)
             self.queue_table.setItem(row, 4, complexity_item)
@@ -454,7 +430,6 @@ class MainWindow(QMainWindow):
             est_item = QTableWidgetItem(f"{est_size:.1f} МБ")
             self.queue_table.setItem(row, 5, est_item)
             
-            # Время сжатия
             compression_time = self.processor.size_estimator.estimate_compression_time(
                 duration=info["duration"],
                 width=info.get("width", 1920),
@@ -467,13 +442,11 @@ class MainWindow(QMainWindow):
             time_item = QTableWidgetItem(time_formatted)
             self.queue_table.setItem(row, 6, time_item)
             
-            # Кнопки действий
             actions_widget = QWidget()
             actions_layout = QHBoxLayout(actions_widget)
             actions_layout.setContentsMargins(2, 2, 2, 2)
             actions_layout.setSpacing(2)
             
-            # Кнопка информации
             info_btn = QToolButton()
             info_btn.setText("ℹ")
             info_btn.setToolTip("Информация о файле")
@@ -481,11 +454,9 @@ class MainWindow(QMainWindow):
             info_btn.clicked.connect(self.on_info_button_clicked)
             info_btn.setFixedSize(24, 24)
             
-            # Кнопка удаления
             delete_btn = QToolButton()
             delete_btn.setText("✕")
             delete_btn.setToolTip("Удалить из очереди")
-            # Привязываем к пути к файлу, а не к индексу
             delete_btn.setProperty("file_path", file_path)
             delete_btn.clicked.connect(self.on_delete_button_clicked)
             delete_btn.setFixedSize(24, 24)
@@ -513,10 +484,8 @@ class MainWindow(QMainWindow):
                 self.remove_from_queue(file_path_to_delete)
 
     def remove_from_queue(self, file_path_to_delete):
-        """Удаляет файл из очереди или с текущей позиции по его пути"""
         file_removed = False
         
-        # Сначала проверяем, не является ли файл текущим
         if self.current_file == file_path_to_delete:
             logging.info(f"Текущий файл {os.path.basename(file_path_to_delete)} удален.")
             self.current_file = None
@@ -524,20 +493,16 @@ class MainWindow(QMainWindow):
             self._cached_info = None
             file_removed = True
             
-            # Если в очереди есть файлы, делаем следующий текущим
             if self.file_queue:
                 self.current_file, self.current_info = self.file_queue.pop(0)
                 self.set_current_file(self.current_file, self.current_info)
             else:
-                # Если очередь пуста, сбрасываем UI но оставляем вкладки активными
-                # Исправлено: set_ui_enabled(True) вместо False, чтобы вкладки работали
                 self.set_ui_enabled(True) 
                 self.file_label.setText("Перетащите файлы сюда или нажмите 'Выбрать'")
                 self.process_btn.setEnabled(False)
                 self.vfr_status_label.setText("Статус VFR: Не определено")
                 self.vfr_status_label.setStyleSheet("color: gray;")
         else:
-            # Иначе ищем в очереди
             try:
                 index = next(i for i, (path, _) in enumerate(self.file_queue) if path == file_path_to_delete)
                 self.file_queue.pop(index)
@@ -547,10 +512,8 @@ class MainWindow(QMainWindow):
                 logging.error(f"Не удалось найти файл для удаления: {file_path_to_delete}")
 
         if file_removed:
-            # Обновляем таблицу и метку в любом случае
             self.update_queue_table()
             self.update_queue_label()
-
 
     def process_first_in_queue(self):
         if self.file_queue and self.current_file is None:
@@ -559,7 +522,6 @@ class MainWindow(QMainWindow):
             self.set_current_file(self.current_file, self.current_info)
 
     def update_queue_label(self):
-        # Считаем текущий файл как "в обработке", а не в очереди
         self.queue_label.setText(f"В очереди: {len(self.file_queue)} файлов")
 
     def select_files(self):
@@ -677,20 +639,15 @@ class MainWindow(QMainWindow):
             logging.warning("Предупреждение: Сначала выберите файл")
             return
         
-        # Инициализация пакета, если это первый файл
         if not self.batch_in_progress:
             self.batch_in_progress = True
-            # Считаем общее количество файлов: текущий + те, что в очереди
             self.total_files_in_batch = len(self.file_queue) + (1 if self.current_file else 0)
             self.completed_files_in_batch = 0
             logging.info(f"Начало обработки пакета из {self.total_files_in_batch} файла(ов).")
         
         self.processing_stopped = False
-        
-        # Запоминаем время начала обработки
         self.compression_start_time = datetime.now()
         
-        # Определяем текущую активную операцию (вкладку)
         current_tab_index = self.operations_tabs.currentIndex()
         current_tab_text = self.operations_tabs.tabText(current_tab_index)
         
@@ -749,7 +706,6 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Отменено пользователем")
         self.progress_bar.setValue(0)
         
-        # Сброс состояния пакета
         self.batch_in_progress = False
         self.total_files_in_batch = 0
         self.completed_files_in_batch = 0
@@ -790,7 +746,6 @@ class MainWindow(QMainWindow):
 
     def update_progress(self, value, message):
         if self.batch_in_progress and self.total_files_in_batch > 0:
-            # Рассчитываем общий прогресс для всего пакета
             current_file_progress = value / 100.0
             total_progress_float = (self.completed_files_in_batch + current_file_progress) / self.total_files_in_batch
             total_progress_percent = int(total_progress_float * 100)
@@ -800,23 +755,20 @@ class MainWindow(QMainWindow):
             current_file_name = os.path.basename(self.current_file) if self.current_file else "неизвестный файл"
             self.status_label.setText(f"Обработка: {current_file_name} ({value}%) | Общий прогресс: {total_progress_percent}%")
         else:
-            # Для одиночного файла или вне пакета
             self.progress_bar.setValue(value)
             self.status_label.setText(message)
 
     def _handle_file_completion(self):
-        """Внутренний метод для обновления счетчика обработанных файлов."""
         if self.batch_in_progress:
             self.completed_files_in_batch += 1
             logging.info(f"Файл обработан. Прогресс по пакету: {self.completed_files_in_batch}/{self.total_files_in_batch}")
 
     def on_finished(self, result):
-        # Рассчитываем и логируем время обработки
         if self.compression_start_time:
             compression_time = datetime.now() - self.compression_start_time
-            compression_time_str = str(compression_time).split('.')[0]  # Обрезаем микросекунды
+            compression_time_str = str(compression_time).split('.')[0]
             logging.info(f"Обработка файла завершена. Затрачено времени: {compression_time_str}")
-            self.compression_start_time = None # Сбрасываем таймер
+            self.compression_start_time = None
 
         logging.info(f"Готово: {result}")
         self._handle_file_completion()
@@ -827,7 +779,6 @@ class MainWindow(QMainWindow):
             self.on_canceled()
 
     def on_error(self, error):
-        # Логируем время даже в случае ошибки
         if self.compression_start_time:
             compression_time = datetime.now() - self.compression_start_time
             compression_time_str = str(compression_time).split('.')[0]
@@ -851,13 +802,11 @@ class MainWindow(QMainWindow):
             return
             
         if self.current_file:
-            # Текущий файл уже был обработан, ищем следующий в очереди
             if self.file_queue:
                 self.current_file, self.current_info = self.file_queue.pop(0)
                 self.set_current_file(self.current_file, self.current_info)
                 QTimer.singleShot(500, self.start_processing)
             else:
-                # Очередь пуста
                 self.current_file = None
                 self.current_info = None
         
@@ -865,7 +814,6 @@ class MainWindow(QMainWindow):
         self.update_queue_label()
         
         if not self.current_file:
-            # Пакет завершен
             if self.batch_in_progress:
                 logging.info("Обработка пакета завершена.")
                 self.batch_in_progress = False
@@ -882,11 +830,10 @@ class MainWindow(QMainWindow):
         self.process_btn.setEnabled(enabled and self.current_file is not None)
         self.cancel_btn.setEnabled(not enabled and self.current_file is not None)
         self.cancel_btn.setVisible(not enabled and self.current_file is not None)
-        self.operations_tabs.setEnabled(enabled) # Блокируем вкладки операций
+        self.operations_tabs.setEnabled(enabled)
         self.output_dir_btn.setEnabled(enabled)
 
     def log_slot(self, message):
-        """Слот для приема сообщений лога от QtHandler"""
         if hasattr(self, 'log_text'):
             timestamp = datetime.now().strftime("%H:%M:%S")
             self.log_text.append(f"[{timestamp}] {message}")
@@ -960,6 +907,19 @@ class MainWindow(QMainWindow):
         ytdlp_group.setLayout(ytdlp_layout)
         layout.addWidget(ytdlp_group)
         
+        deno_group = QGroupBox("Deno (JavaScript runtime для YouTube)")
+        deno_layout = QVBoxLayout()
+        
+        deno_version_layout = QHBoxLayout()
+        self.deno_status_label = QLabel("Статус: не проверено")
+        self.deno_status_label.setStyleSheet("color: gray;")
+        deno_version_layout.addWidget(self.deno_status_label)
+        deno_version_layout.addStretch()
+        deno_layout.addLayout(deno_version_layout)
+        
+        deno_group.setLayout(deno_layout)
+        layout.addWidget(deno_group)
+        
         layout.addStretch()
         
         save_btn = QPushButton("Сохранить настройки")
@@ -1012,6 +972,27 @@ class MainWindow(QMainWindow):
         else:
             self.ytdlp_status_label.setText("Статус: не установлен")
             self.ytdlp_status_label.setStyleSheet("color: red;")
+        
+        if is_deno_installed():
+            self.deno_status_label.setText("Статус: установлен")
+            self.deno_status_label.setStyleSheet("color: green;")
+        else:
+            self.deno_status_label.setText("Статус: не установлен (будет установлен автоматически)")
+            self.deno_status_label.setStyleSheet("color: orange;")
+            QTimer.singleShot(1000, lambda: self._install_deno_background())
+    
+    def _install_deno_background(self):
+        def callback(msg):
+            self.deno_status_label.setText(f"Статус: {msg}")
+            QApplication.processEvents()
+        
+        success = ensure_deno_installed(callback)
+        if success:
+            self.deno_status_label.setText("Статус: установлен")
+            self.deno_status_label.setStyleSheet("color: green;")
+        else:
+            self.deno_status_label.setText("Статус: ошибка установки")
+            self.deno_status_label.setStyleSheet("color: red;")
     
     def update_ytdlp_from_settings(self):
         self.ytdlp_status_label.setText("Статус: установка/обновление...")
@@ -1032,9 +1013,61 @@ class MainWindow(QMainWindow):
             self.ytdlp_status_label.setStyleSheet("color: red;")
             QMessageBox.warning(self, "Ошибка", f"Не удалось установить yt-dlp:\n{msg}")
 
+    # --- НОВАЯ ВЕРСИЯ ВКЛАДКИ СКАЧИВАНИЯ ---
     def create_download_tab(self):
         layout = QVBoxLayout(self.download_tab)
         
+        # Группа авторизации
+        auth_group = QGroupBox("Авторизация (необходима для видео 18+ и закрытых видео)")
+        auth_layout = QVBoxLayout()
+        
+        self.auth_group_btn = QButtonGroup(self)
+        
+        # 1. Без авторизации
+        self.auth_none_radio = QRadioButton("Без авторизации (Только для открытых видео)")
+        self.auth_none_radio.setChecked(True)
+        self.auth_group_btn.addButton(self.auth_none_radio)
+        auth_layout.addWidget(self.auth_none_radio)
+        
+        # 2. Из установленного браузера
+        browser_layout = QHBoxLayout()
+        self.auth_browser_radio = QRadioButton("Использовать профиль браузера:")
+        self.auth_group_btn.addButton(self.auth_browser_radio)
+        self.browser_combo = QComboBox()
+        self.browser_combo.addItems(["chrome", "edge", "firefox", "brave", "opera", "vivaldi", "safari", "chromium"])
+        browser_layout.addWidget(self.auth_browser_radio)
+        browser_layout.addWidget(self.browser_combo)
+        browser_layout.addStretch()
+        auth_layout.addLayout(browser_layout)
+        
+        # 3. Из файла cookies.txt (Самый надежный)
+        file_layout = QHBoxLayout()
+        self.auth_file_radio = QRadioButton("Из файла cookies.txt:")
+        self.auth_group_btn.addButton(self.auth_file_radio)
+        self.cookies_file_input = QLineEdit()
+        self.cookies_file_input.setPlaceholderText("Путь к файлу cookies.txt")
+        browse_cookies_btn = QPushButton("Обзор")
+        browse_cookies_btn.clicked.connect(self.browse_cookies_file)
+        file_layout.addWidget(self.auth_file_radio)
+        file_layout.addWidget(self.cookies_file_input)
+        file_layout.addWidget(browse_cookies_btn)
+        auth_layout.addLayout(file_layout)
+        
+        # Подсказка
+        help_label = QLabel(
+            'ℹ️ <b>Для нестандартных браузеров (Thorium, Яндекс и др.):</b><br>'
+            '1. Установите расширение <b>"Get cookies.txt LOCALLY"</b><br>'
+            '2. Авторизуйтесь на YouTube<br>'
+            '3. Выгрузите файл <i>cookies.txt</i> и выберите его в пункте выше.'
+        )
+        help_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        help_label.setWordWrap(True)
+        auth_layout.addWidget(help_label)
+        
+        auth_group.setLayout(auth_layout)
+        layout.addWidget(auth_group)
+        
+        # URL
         url_layout = QHBoxLayout()
         url_layout.addWidget(QLabel("URL видео:"))
         self.youtube_url_input = QLineEdit()
@@ -1042,6 +1075,23 @@ class MainWindow(QMainWindow):
         url_layout.addWidget(self.youtube_url_input)
         layout.addLayout(url_layout)
         
+        # Настройки качества и формата
+        settings_layout = QHBoxLayout()
+        
+        settings_layout.addWidget(QLabel("Формат:"))
+        self.download_format_combo = QComboBox()
+        self.download_format_combo.addItems(["MP4 (Без конвертации)", "Лучший (Любой формат)", "Только Аудио (MP3)"])
+        settings_layout.addWidget(self.download_format_combo)
+        
+        settings_layout.addWidget(QLabel("Качество:"))
+        self.download_res_combo = QComboBox()
+        self.download_res_combo.addItems(["Максимальное", "1080p", "720p", "480p", "360p"])
+        settings_layout.addWidget(self.download_res_combo)
+        
+        settings_layout.addStretch()
+        layout.addLayout(settings_layout)
+        
+        # Путь сохранения
         path_layout = QHBoxLayout()
         path_layout.addWidget(QLabel("Сохранить в:"))
         self.download_path_input = QLineEdit()
@@ -1052,9 +1102,7 @@ class MainWindow(QMainWindow):
         path_layout.addWidget(download_browse_btn)
         layout.addLayout(path_layout)
         
-        self.audio_only_checkbox = QCheckBox("Только аудио (mp3)")
-        layout.addWidget(self.audio_only_checkbox)
-        
+        # Кнопка скачать
         self.download_btn = QPushButton("Скачать")
         self.download_btn.setMinimumHeight(40)
         self.download_btn.clicked.connect(self.start_youtube_download)
@@ -1074,7 +1122,13 @@ class MainWindow(QMainWindow):
         self.download_log.setReadOnly(True)
         self.download_log.setStyleSheet("background-color: #1e1e1e; color: #00ff00; font-family: Consolas;")
         layout.addWidget(self.download_log)
-    
+
+    def browse_cookies_file(self):
+        file, _ = QFileDialog.getOpenFileName(self, "Выберите файл cookies.txt", "", "Text Files (*.txt);;All Files (*)")
+        if file:
+            self.cookies_file_input.setText(file)
+            self.auth_file_radio.setChecked(True)
+
     def browse_download_path(self):
         folder = QFileDialog.getExistingDirectory(self, "Выберите папку для сохранения")
         if folder:
@@ -1102,16 +1156,46 @@ class MainWindow(QMainWindow):
             else:
                 return
         
+        auth_mode = 'none'
+        browser_name = None
+        cookies_file = None
+        
+        if self.auth_browser_radio.isChecked():
+            auth_mode = 'browser'
+            browser_name = self.browser_combo.currentText()
+        elif self.auth_file_radio.isChecked():
+            auth_mode = 'file'
+            cookies_file = self.cookies_file_input.text().strip()
+            if not cookies_file or not os.path.exists(cookies_file):
+                QMessageBox.warning(self, "Ошибка", "Укажите правильный путь к файлу cookies.txt!")
+                return
+        
+        format_idx = self.download_format_combo.currentIndex()
+        if format_idx == 0:
+            format_type = 'mp4'
+        elif format_idx == 1:
+            format_type = 'best'
+        else:
+            format_type = 'mp3'
+            
+        res_text = self.download_res_combo.currentText()
+        if res_text == "Максимальное":
+            resolution = None
+        else:
+            resolution = res_text.replace("p", "")
+        
         self.download_btn.setEnabled(False)
         self.youtube_url_input.setEnabled(False)
         self.download_progress_bar.setValue(0)
         self.download_log.clear()
         
-        audio_only = self.audio_only_checkbox.isChecked()
         self.append_download_log(f"Путь к yt-dlp: {get_yt_dlp_path()}")
-        self.append_download_log(f"Режим: {'Только аудио' if audio_only else 'Видео + аудио'}")
+        self.append_download_log(f"Формат: {format_type.upper()}, Качество: {res_text}")
         
-        self.download_worker = YoutubeDownloadWorker(url, self.download_path_input.text(), audio_only)
+        self.download_worker = YoutubeDownloadWorker(
+            url, self.download_path_input.text(), format_type, resolution,
+            auth_mode, browser_name, cookies_file
+        )
         self.download_worker.progress_signal.connect(self.download_status_label.setText)
         self.download_worker.percent_signal.connect(self.download_progress_bar.setValue)
         self.download_worker.log_signal.connect(self.append_download_log)
@@ -1121,6 +1205,7 @@ class MainWindow(QMainWindow):
     
     def append_download_log(self, msg):
         self.download_log.append(msg)
+        logging.info(f"[YouTube DL] {msg}")
         sb = self.download_log.verticalScrollBar()
         sb.setValue(sb.maximum())
     
@@ -1146,16 +1231,22 @@ class YoutubeDownloadWorker(QThread):
     error_signal = Signal(str)
     log_signal = Signal(str)
     
-    def __init__(self, url, path, audio_only=False):
+    def __init__(self, url, path, format_type='mp4', resolution=None, auth_mode='none', browser_name=None, cookies_file=None):
         super().__init__()
         self.url = url
         self.path = path
-        self.audio_only = audio_only
+        self.format_type = format_type
+        self.resolution = resolution
+        self.auth_mode = auth_mode
+        self.browser_name = browser_name
+        self.cookies_file = cookies_file
     
     def run(self):
         import sys
-        from settings_manager import get_yt_dlp_path
-        from yt_dlp_manager import get_yt_dlp_bin_dir
+        import traceback
+        from settings_manager import get_yt_dlp_path, get_actual_ffmpeg_path
+        from yt_dlp_manager import get_yt_dlp_bin_dir, get_deno_path
+        
         yt_path = get_yt_dlp_path()
         bin_path = get_yt_dlp_bin_dir()
         if yt_path not in sys.path:
@@ -1163,40 +1254,89 @@ class YoutubeDownloadWorker(QThread):
         if bin_path not in sys.path:
             sys.path.insert(0, bin_path)
         
-        import yt_dlp
+        try:
+            import yt_dlp
+        except ImportError:
+            self.error_signal.emit("Модуль yt_dlp не найден. Обновите его в настройках.")
+            return
+
+        # Добавляем Deno в PATH, чтобы yt-dlp мог его найти для обхода блокировок
+        deno_path = get_deno_path()
+        deno_dir = os.path.dirname(deno_path)
+        if os.path.exists(deno_path) and deno_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = deno_dir + os.pathsep + os.environ.get("PATH", "")
+            self.log_signal.emit(f"[INFO] Deno добавлен в PATH для обхода блокировок YouTube")
         
-        if self.audio_only:
-            format_str = 'bestaudio[ext=m4a]/bestaudio/best'
-            outtmpl = os.path.join(self.path, '%(title)s.%(ext)s')
+        res_str = ""
+        if self.resolution:
+            res_str = f"[height<={self.resolution}]"
+        
+        # Формируем строку фильтра с fallback-вариантами, чтобы не было ошибки "Requested format is not available"
+        if self.format_type == 'mp4':
+            # Сначала пытаемся найти mp4 видео + m4a аудио. Если нет, берем просто mp4. Если и этого нет, берем любой лучший.
+            format_str = f'bestvideo[ext=mp4]{res_str}+bestaudio[ext=m4a]/best[ext=mp4]{res_str}/best{res_str}/best'
+            merge_format = 'mp4'
+        elif self.format_type == 'mp3':
+            format_str = 'bestaudio/best'
+            merge_format = None
         else:
-            format_str = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
-            outtmpl = os.path.join(self.path, '%(title)s.%(ext)s')
+            format_str = f'bestvideo{res_str}+bestaudio/best{res_str}/best'
+            merge_format = 'mkv'
+            
+        outtmpl = os.path.join(self.path, '%(title)s.%(ext)s')
         
         ydl_opts = {
             'format': format_str,
             'outtmpl': outtmpl,
-            'progress_hooks': [self.progress_hook],
+            'progress_hooks':[self.progress_hook],
             'noplaylist': True,
             'socket_timeout': 60,
-            'retries': 20,
-            'fragment_retries': 20,
-            'ignoreerrors': True,
-            'quiet': True,
-            'no_warnings': True,
+            'retries': 10,
+            'fragment_retries': 10,
+            'ignoreerrors': False,
+            'quiet': True,        # Убираем спам в консоли
+            'no_warnings': True,  # Убираем предупреждения
+            'verbose': False,     # Отключаем DEBUG-логи
+            'ffmpeg_location': get_actual_ffmpeg_path(),
         }
         
-        if self.audio_only:
-            ydl_opts['postprocessors'] = [{
+        if merge_format:
+            ydl_opts['merge_output_format'] = merge_format
+        
+        if self.format_type == 'mp3':
+            ydl_opts['postprocessors'] =[{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }]
+            
+        # --- ПРИМЕНЕНИЕ АВТОРИЗАЦИИ ---
+        if self.auth_mode == 'browser' and self.browser_name:
+            ydl_opts['cookiesfrombrowser'] = (self.browser_name,)
+            self.log_signal.emit(f"[INFO] Используются cookies из браузера: {self.browser_name}")
+        elif self.auth_mode == 'file' and self.cookies_file:
+            ydl_opts['cookiefile'] = self.cookies_file
+            self.log_signal.emit(f"[INFO] Используются cookies из файла: {self.cookies_file}")
+        else:
+            self.log_signal.emit("[INFO] Скачивание без авторизации (анонимно)")
         
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                self.log_signal.emit("--- Анализ видео и получение прямых ссылок ---")
+                self.log_signal.emit("--- Анализ видео ---")
+                self.log_signal.emit(f"[URL] {self.url}")
                 
                 info = ydl.extract_info(self.url, download=False)
+                
+                if info is None:
+                    self.log_signal.emit("\n" + "="*50)
+                    self.log_signal.emit("!!! ОШИБКА ЗАГРУЗКИ !!!")
+                    self.log_signal.emit("="*50)
+                    self.log_signal.emit("Не удалось получить информацию о видео.")
+                    self.log_signal.emit("Если видео требует подтверждения возраста (18+) или скрыто:")
+                    self.log_signal.emit("- Используйте метод 'Из файла cookies.txt'")
+                    self.log_signal.emit("="*50)
+                    self.error_signal.emit("Ошибка: не удалось получить информацию о видео (возрастное ограничение?)")
+                    return
                 
                 title = info.get('title', 'Video')
                 self.log_signal.emit(f"Название: {title}")
@@ -1205,22 +1345,18 @@ class YoutubeDownloadWorker(QThread):
                     for f in info['requested_formats']:
                         ftype = "ВИДЕО" if f.get('vcodec') != 'none' else "АУДИО"
                         note = f.get('format_note', 'unknown')
-                        direct_url = f.get('url', 'нет ссылки')
-                        
                         self.log_signal.emit(f"\n[{ftype}] Качество: {note}")
-                        self.log_signal.emit(f"SOURCE URL: {direct_url}")
-                
-                elif 'url' in info:
-                    self.log_signal.emit(f"\n[ФАЙЛ] Прямая ссылка:")
-                    self.log_signal.emit(f"SOURCE URL: {info['url']}")
                 
                 self.log_signal.emit("\n--- Начало загрузки ---")
-                
                 ydl.download([self.url])
             
             self.finished_signal.emit()
             
         except Exception as e:
+            # Не печатаем огромный traceback в UI лог, чтобы не засорять
+            self.log_signal.emit(f"\n=== КРИТИЧЕСКАЯ ОШИБКА ===")
+            self.log_signal.emit(f"Тип: {type(e).__name__}")
+            self.log_signal.emit(f"Сообщение: {str(e)}")
             self.error_signal.emit(str(e))
     
     def progress_hook(self, d):
@@ -1250,16 +1386,13 @@ class YoutubeDownloadWorker(QThread):
 def main():
     app = QApplication(sys.argv)
     
-    # Проверка и вывод информации о среде выполнения
     processor = VideoProcessor()
     
-    # Выводим информацию о среде выполнения в лог
     logging.info("--- Информация о среде выполнения ---")
     gpu_info = processor.get_gpu_info()
     logging.info(gpu_info)
     if "Доступные GPU" in gpu_info:
         logging.info("-> Обнаружена поддержка аппаратного кодирования (GPU).")
-        logging.info("-> В настройках программы можно выбрать тип кодирования: 'Аппаратное (NVENC)' или 'Программное (CPU)'.")
     else:
         logging.info("-> Аппаратное кодирование не обнаружено. Сжатие будет выполняться на процессоре (CPU).")
     logging.info("------------------------------------\n")
