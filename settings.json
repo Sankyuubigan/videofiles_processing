@@ -1,0 +1,10 @@
+{
+    "ffmpeg_path": "./",
+    "yt_dlp_path": "./yt_dlp",
+    "download_path": "E:/Downloads",
+    "auth_mode": "file",
+    "auth_browser": "chrome",
+    "cookies_file": "D:/Projects/videofile_pro/cookies/cookies_chegevara.txt",
+    "download_format": 0,
+    "download_quality": 1
+}

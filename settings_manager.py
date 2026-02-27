@@ -11,7 +11,13 @@ SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
 
 DEFAULT_SETTINGS = {
     "ffmpeg_path": "./",
-    "yt_dlp_path": "./yt_dlp"
+    "yt_dlp_path": "./yt_dlp",
+    "download_path": "",
+    "auth_mode": "none",
+    "auth_browser": "chrome",
+    "cookies_file": "",
+    "download_format": 0,
+    "download_quality": 0
 }
 
 _settings_cache = None
@@ -25,6 +31,10 @@ def load_settings():
         try:
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                 _settings_cache = json.load(f)
+                # Дополняем отсутствующие ключи дефолтными
+                for k, v in DEFAULT_SETTINGS.items():
+                    if k not in _settings_cache:
+                        _settings_cache[k] = v
         except (json.JSONDecodeError, IOError):
             _settings_cache = DEFAULT_SETTINGS.copy()
     else:
