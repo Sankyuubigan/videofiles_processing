@@ -80,11 +80,11 @@ class MainWindow(QMainWindow):
             "Имя файла", "Размер", "Длительность", "Статус VFR", 
             "Сложность", "Примерный размер", "Время сжатия", "Действия"
         ])
-        self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for i in range(1, 8):
-            self.queue_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
-        self.queue_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.queue_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.queue_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setAlternatingRowColors(True)
         queue_layout.addWidget(self.queue_table)
         queue_group.setLayout(queue_layout)
@@ -179,7 +179,7 @@ class MainWindow(QMainWindow):
         
         crf_layout = QHBoxLayout()
         self.crf_label = QLabel("CRF: ")
-        self.crf_slider = QSlider(Qt.Horizontal)
+        self.crf_slider = QSlider(Qt.Orientation.Horizontal)
         self.crf_slider.valueChanged.connect(self.on_crf_changed)
         crf_layout.addWidget(self.crf_label)
         crf_layout.addWidget(self.crf_slider)
@@ -470,7 +470,7 @@ class MainWindow(QMainWindow):
         self.compression_worker.start()
 
     def cancel_processing(self):
-        if QMessageBox.question(self, "Отмена", "Отменить процесс?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+        if QMessageBox.question(self, "Отмена", "Отменить процесс?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             self.processing_stopped = True
             if self.compression_worker:
                 self.compression_worker.stop()
@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.compression_worker and self.compression_worker.isRunning():
-            if QMessageBox.question(self, "Выход", "Идет обработка. Выйти?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            if QMessageBox.question(self, "Выход", "Идет обработка. Выйти?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
                 self.compression_worker.stop()
                 self.compression_worker.wait(2000)
                 event.accept()

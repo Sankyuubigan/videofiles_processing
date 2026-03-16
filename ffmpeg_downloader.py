@@ -4,7 +4,8 @@ import zipfile
 import tempfile
 import shutil
 from pathlib import Path
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QMessageBox, QWidget, QApplication
+from PySide6.QtCore import Qt
 from settings_manager import get_actual_ffmpeg_path, get_ffprobe_path
 
 
@@ -20,13 +21,16 @@ class FFmpegDownloader:
         if os.path.exists(ffmpeg_path) and os.path.exists(ffprobe_path):
             return True
             
+        parent = QApplication.activeWindow()
+        if parent is None:
+            parent = QWidget()
         reply = QMessageBox.question(
-            None, "FFmpeg не найден",
+            parent, "FFmpeg не найден",
             "FFmpeg не найден. Скачать автоматически?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             return self.download_ffmpeg()
         return False
         
@@ -64,5 +68,8 @@ class FFmpegDownloader:
             return os.path.exists("ffmpeg.exe") and os.path.exists("ffprobe.exe")
             
         except Exception as e:
-            QMessageBox.critical(None, "Ошибка", f"Не удалось скачать FFmpeg:\n{str(e)}")
+            parent = QApplication.activeWindow()
+            if parent is None:
+                parent = QWidget()
+            QMessageBox.critical(parent, "Ошибка", f"Не удалось скачать FFmpeg:\n{str(e)}")
             return False

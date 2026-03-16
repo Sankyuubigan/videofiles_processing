@@ -38,7 +38,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('ffmpeg.exe', '.'), ('ffprobe.exe', '.')],
+    datas=[],
     hiddenimports=[
         'PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets',
         'yt_dlp', 'yt_dlp.utils', 'yt_dlp.extractor', 'yt_dlp.postprocessor',
@@ -66,9 +66,9 @@ exe = EXE(
     name='VideoCompressor',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=['PySide6', 'Qt6'],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
@@ -113,8 +113,8 @@ exe = EXE(
             
             print(f"📦 Готовый к распространению файл: {release_exe.absolute()}")
             print("\nℹ️  Примечание:")
-            print("   - Все зависимости включены в exe файл")
-            print("   - FFmpeg встроен в приложение")
+            print("   - Все зависимости Python включены в exe файл")
+            print("   - FFmpeg будет загружен автоматически при первом запуске (если не найден)")
             print("   - yt-dlp устанавливается при первом запуске (вкладка Настройки)")
             print("   - Для работы YouTube Downloader нажмите 'Установить/Обновить yt-dlp'")
             
