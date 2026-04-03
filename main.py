@@ -21,6 +21,7 @@ from gui_logger import setup_logging
 from settings_manager import get_actual_ffmpeg_path, get_ffprobe_path
 from tab_settings import SettingsTab
 from tab_download import DownloadTab
+from crf_extractor import format_crf_display
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -75,13 +76,13 @@ class MainWindow(QMainWindow):
         queue_group = QGroupBox("Очередь файлов")
         queue_layout = QVBoxLayout()
         self.queue_table = QTableWidget()
-        self.queue_table.setColumnCount(8)
+        self.queue_table.setColumnCount(9)
         self.queue_table.setHorizontalHeaderLabels([
-            "Имя файла", "Размер", "Длительность", "Статус VFR", 
+            "Имя файла", "Размер", "Длительность", "CRF", "Статус VFR", 
             "Сложность", "Примерный размер", "Время сжатия", "Действия"
         ])
         self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for i in range(1, 8):
+        for i in range(1, 9):
             self.queue_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -308,10 +309,19 @@ class MainWindow(QMainWindow):
             self.queue_table.setItem(row, 0, QTableWidgetItem(os.path.basename(file_path)))
             self.queue_table.setItem(row, 1, QTableWidgetItem(f"{info.get('size_mb', 0):.1f} МБ"))
             self.queue_table.setItem(row, 2, QTableWidgetItem(self.processor.size_estimator.format_duration(info.get("duration", 0))))
+            crf_value = info.get('crf_value')
+            crf_text = format_crf_display(crf_value)
+            logging.debug(f"Отображение CRF для {os.path.basename(file_path)}: crf_value={crf_value}, crf_text='{crf_text}'")
+            crf_item = QTableWidgetItem(crf_text)
+            if crf_text == "нет":
+                crf_item.setForeground(Qt.GlobalColor.gray)
+            else:
+                crf_item.setForeground(Qt.GlobalColor.darkBlue)
+            self.queue_table.setItem(row, 3, crf_item)
             vfr_item = QTableWidgetItem("Требуется" if info.get("needs_vfr_fix") else "Не требуется")
             vfr_item.setForeground(Qt.GlobalColor.red if info.get("needs_vfr_fix") else Qt.GlobalColor.darkGreen)
-            self.queue_table.setItem(row, 3, vfr_item)
-            self.queue_table.setItem(row, 4, QTableWidgetItem(info.get('complexity_desc', 'Не определено')))
+            self.queue_table.setItem(row, 4, vfr_item)
+            self.queue_table.setItem(row, 5, QTableWidgetItem(info.get('complexity_desc', 'Не определено')))
             est_size = self.processor.estimated_size_mb(
                 video_bitrate=info.get("video_bitrate", 0), audio_bitrate=info.get("audio_bitrate", 128000),
                 duration=info["duration"], crf=self.crf_slider.value(), codec=self.current_codec(),
@@ -319,12 +329,12 @@ class MainWindow(QMainWindow):
                 use_hardware=self.hardware_radio.isChecked(), preset=self.current_preset(),
                 complexity_score=info.get('complexity_score', 5), width=info.get("width", 1920), height=info.get("height", 1080)
             )
-            self.queue_table.setItem(row, 5, QTableWidgetItem(f"{est_size:.1f} МБ"))
+            self.queue_table.setItem(row, 6, QTableWidgetItem(f"{est_size:.1f} МБ"))
             time_formatted = self.processor.size_estimator.format_duration(self.processor.size_estimator.estimate_compression_time(
                 duration=info["duration"], width=info.get("width", 1920), height=info.get("height", 1080),
                 preset=self.current_preset(), codec=self.current_codec(), use_hardware=self.hardware_radio.isChecked()
             ))
-            self.queue_table.setItem(row, 6, QTableWidgetItem(time_formatted))
+            self.queue_table.setItem(row, 7, QTableWidgetItem(time_formatted))
             
             actions_widget = QWidget()
             actions_layout = QHBoxLayout(actions_widget)
@@ -340,7 +350,7 @@ class MainWindow(QMainWindow):
             actions_layout.addWidget(info_btn)
             actions_layout.addWidget(delete_btn)
             actions_layout.addStretch()
-            self.queue_table.setCellWidget(row, 7, actions_widget)
+            self.queue_table.setCellWidget(row, 8, actions_widget)
         self.queue_table.viewport().update()
 
     def on_info_button_clicked(self):

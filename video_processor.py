@@ -7,6 +7,7 @@ from typing import Optional, Callable
 from config import COMPRESSED_VIDEO_SUFFIX, TRIMMED_VIDEO_SUFFIX
 from video_size_estimator import VideoSizeEstimator
 from ffmpeg_handler import FFmpegHandler
+from crf_extractor import get_crf_from_file
 
 
 class VideoProcessor:
@@ -75,13 +76,19 @@ class VideoProcessor:
             height=height
         )
         
+        # Извлечение CRF из метаданных файла
+        logging.debug(f"Вызов get_crf_from_file для: {input_path}")
+        crf_value = get_crf_from_file(input_path)
+        logging.info(f"Получено crf_value для {input_path}: {crf_value}")
+        
         # Добавляем вычисленные поля в информацию
         video_info.update({
             "estimated_size_mb": est_size,
             "gpu_info": gpu_info,
             "processing_mode": "GPU" if "Доступные GPU" in gpu_info else "CPU",
             "complexity_score": complexity_score,
-            "complexity_desc": complexity_desc
+            "complexity_desc": complexity_desc,
+            "crf_value": crf_value,
         })
         
         return video_info
