@@ -44,6 +44,12 @@ class WorkerThread(QThread):
                     **self.kwargs
                 )
                 self.finished.emit(result)
+            elif self.mode == 'extract_frame':
+                result = self.processor.extract_frame(
+                    process_setter=self.set_process,
+                    **self.kwargs
+                )
+                self.finished.emit(result)
         except Exception as e:
             import traceback
             traceback.print_exc()

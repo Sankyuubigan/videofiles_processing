@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from config import (OUTPUT_FORMATS, CODECS, DEFAULT_OUTPUT_FORMAT_KEY, 
-                    DEFAULT_CODEC_KEY, DEFAULT_USE_HARDWARE_ENCODING)
+                    DEFAULT_CODEC_KEY, DEFAULT_USE_HARDWARE_ENCODING, EXTRACTED_FRAME_SUFFIX)
 from video_processor import VideoProcessor
 from ffmpeg_downloader import FFmpegDownloader
 from dialogs import VideoInfoDialog
@@ -39,6 +39,9 @@ class MainWindow(QMainWindow):
         self.completed_files_in_batch = 0
         self.output_directory = None
         self.compression_start_time = None
+        
+        # Значение кадра для вкладки "Тест качества" (единое для всей очереди)
+        self.quality_test_frame_number = 0
         
         setup_logging(self.log_slot)
         self.init_ui()
@@ -98,6 +101,8 @@ class MainWindow(QMainWindow):
         self.operations_tabs.addTab(self.trim_tab, "Сокращение")
         self.normalize_tab = self.create_normalize_tab()
         self.operations_tabs.addTab(self.normalize_tab, "Починка громкости")
+        self.quality_test_tab = self.create_quality_test_tab()
+        self.operations_tabs.addTab(self.quality_test_tab, "Тест качества")
         main_tab_layout.addWidget(self.operations_tabs)
 
         process_group = self.create_process_group()
@@ -244,11 +249,49 @@ class MainWindow(QMainWindow):
         layout.addStretch()
         return tab
 
+    def create_quality_test_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        
+        info_label = QLabel("Извлечение конкретного кадра из видео для оценки качества.\nКадр сохраняется в папку с исходным видео.")
+        info_label.setStyleSheet("color: gray;")
+        layout.addWidget(info_label)
+        
+        frame_layout = QHBoxLayout()
+        frame_layout.addWidget(QLabel("Номер кадра:"))
+        self.frame_number_spin = QSpinBox()
+        self.frame_number_spin.setRange(0, 999999)
+        self.frame_number_spin.setValue(0)
+        self.frame_number_spin.setSuffix(" кадр")
+        self.frame_number_spin.valueChanged.connect(self.on_quality_test_frame_changed)
+        frame_layout.addWidget(self.frame_number_spin)
+        frame_layout.addStretch()
+        layout.addLayout(frame_layout)
+        
+        fps_info_label = QLabel("FPS видео: —")
+        fps_info_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(fps_info_label)
+        self.quality_fps_label = fps_info_label
+        
+        total_frames_label = QLabel("Всего кадров: —")
+        total_frames_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(total_frames_label)
+        self.quality_total_frames_label = total_frames_label
+        
+        layout.addSpacing(10)
+        
+        self.extract_frame_status = QLabel("")
+        self.extract_frame_status.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(self.extract_frame_status)
+        
+        layout.addStretch()
+        return tab
+
     def create_process_group(self):
         process_group = QGroupBox("Запуск обработки")
         process_layout = QVBoxLayout()
         buttons_layout = QHBoxLayout()
-        self.process_btn = QPushButton("Начать обработку")
+        self.process_btn = QPushButton("Начать")
         self.process_btn.clicked.connect(self.start_processing)
         self.process_btn.setEnabled(False)
         self.cancel_btn = QPushButton("Отменить")
@@ -396,6 +439,7 @@ class MainWindow(QMainWindow):
         self._cached_info = file_info
         self.check_vfr_status()
         self.operations_tabs.setTabEnabled(0, file_info.get("is_video", True))
+        self.update_quality_test_tab(file_info)
 
     def current_codec(self): return self.codec_combo.currentData()
     def current_preset(self): return self.preset_combo.currentData()
@@ -445,6 +489,89 @@ class MainWindow(QMainWindow):
             self.vfr_status_label.setText("Статус VFR: Рекомендуется!" if needs_fix else "Статус VFR: Не требуется")
             self.vfr_status_label.setStyleSheet("color: orange;" if needs_fix else "color: green;")
 
+    def update_quality_test_tab(self, file_info):
+        """Обновляет информацию о кадрах на вкладке 'Тест качества'."""
+        logging.debug(f"Обновление вкладки 'Тест качества': fps={file_info.get('fps', 0)}, duration={file_info.get('duration', 0)}")
+        fps = file_info.get("fps", 0)
+        duration = file_info.get("duration", 0)
+        if fps > 0 and duration > 0:
+            total_frames = int(duration * fps)
+            self.quality_fps_label.setText(f"FPS видео: {fps:.3f}")
+            self.quality_total_frames_label.setText(f"Всего кадров: ~{total_frames} (макс. номер: {total_frames - 1})")
+            self.frame_number_spin.setRange(0, total_frames - 1)
+            # Не сбрасываем значение — используем единое для всей очереди
+            # Если введённое значение превышает максимум текущего файла, корректируем
+            if self.quality_test_frame_number > total_frames - 1:
+                self.quality_test_frame_number = total_frames - 1
+            # Отключаем сигнал, чтобы setValue не вызвал on_quality_test_frame_changed
+            self.frame_number_spin.blockSignals(True)
+            self.frame_number_spin.setValue(self.quality_test_frame_number)
+            self.frame_number_spin.blockSignals(False)
+            self.extract_frame_status.setText("")
+            logging.debug(f"Вкладка обновлена: {total_frames} кадров, кадр={self.quality_test_frame_number}")
+        else:
+            self.quality_fps_label.setText("FPS видео: —")
+            self.quality_total_frames_label.setText("Всего кадров: —")
+            self.frame_number_spin.setRange(0, 999999)
+            self.extract_frame_status.setText("Невозможно определить количество кадров")
+            logging.warning(f"Невозможно обновить вкладку: некорректные fps={fps} или duration={duration}")
+
+    def on_quality_test_frame_changed(self, value):
+        """Сохраняет введённый номер кадра как единый для всей очереди."""
+        self.quality_test_frame_number = value
+        logging.debug(f"Номер кадра для теста качества изменён на {value} (единый для очереди)")
+
+    def extract_frame_action(self):
+        """Извлекает указанный кадр и сохраняет в папку с видео."""
+        if not self.current_file:
+            logging.warning("extract_frame_action: не выбран видеофайл")
+            QMessageBox.warning(self, "Ошибка", "Не выбран видеофайл.")
+            return
+        
+        frame_number = self.frame_number_spin.value()
+        logging.info(f"Запуск извлечения кадра #{frame_number} из {self.current_file}")
+        
+        # Формируем имя файла: <имя_видео>_frame_<кодек>_crf<crf>_frame<номер>.jpg
+        video_name = os.path.splitext(os.path.basename(self.current_file))[0]
+        codec = self._cached_info.get('video_codec', 'unknown')
+        crf_val = self._cached_info.get('crf_value')
+        crf_str = f"crf{int(crf_val)}" if crf_val is not None else "crfunknown"
+        frame_filename = f"{video_name}{EXTRACTED_FRAME_SUFFIX}_{codec}_{crf_str}_frame{frame_number:06d}.jpg"
+        output_path = os.path.join(os.path.dirname(self.current_file), frame_filename)
+        logging.debug(f"Путь сохранения кадра: {output_path}")
+        
+        self.extract_frame_status.setText("Извлечение кадра...")
+        self.extract_frame_status.setStyleSheet("color: orange;")
+        
+        # Запускаем в потоке
+        logging.debug(f"Создание WorkerThread для extract_frame")
+        self.compression_worker = WorkerThread(
+            self.processor, "extract_frame",
+            input_path=self.current_file,
+            frame_number=frame_number,
+            output_path=output_path
+        )
+        self.compression_worker.progress_updated.connect(self.update_progress)
+        self.compression_worker.finished.connect(self.on_extract_frame_finished)
+        self.compression_worker.error_occurred.connect(self.on_extract_frame_error)
+        self.active_workers.append(self.compression_worker)
+        logging.debug(f"Запуск WorkerThread для извлечения кадра")
+        self.compression_worker.start()
+
+    def on_extract_frame_finished(self, result):
+        """Обработка успешного извлечения кадра."""
+        logging.info(f"Кадр успешно извлечён и сохранён: {result}")
+        self.extract_frame_status.setText(f"Кадр сохранён: {os.path.basename(result)}")
+        self.extract_frame_status.setStyleSheet("color: green;")
+        QMessageBox.information(self, "Готово", f"Кадр успешно сохранён:\n{result}")
+
+    def on_extract_frame_error(self, error):
+        """Обработка ошибки при извлечении кадра."""
+        logging.error(f"Ошибка при извлечении кадра: {error}")
+        self.extract_frame_status.setText("Ошибка при извлечении кадра!")
+        self.extract_frame_status.setStyleSheet("color: red;")
+        QMessageBox.critical(self, "Ошибка", f"Не удалось извлечь кадр:\n{error}")
+
     def start_processing(self):
         if not self.current_file: return
         if not self.batch_in_progress:
@@ -470,6 +597,18 @@ class MainWindow(QMainWindow):
             params.update({"seconds": self.trim_seconds_spin.value(), "from_start": self.trim_from_start_radio.isChecked()})
         elif current_tab_text == "Починка громкости":
             worker_mode = "normalize_audio"
+        elif current_tab_text == "Тест качества":
+            worker_mode = "extract_frame"
+            frame_number = self.frame_number_spin.value()
+            video_name = os.path.splitext(os.path.basename(self.current_file))[0]
+            codec = self._cached_info.get('video_codec', 'unknown')
+            crf_val = self._cached_info.get('crf_value')
+            crf_str = f"crf{int(crf_val)}" if crf_val is not None else "crfunknown"
+            frame_filename = f"{video_name}{EXTRACTED_FRAME_SUFFIX}_{codec}_{crf_str}_frame{frame_number:06d}.jpg"
+            output_dir = self.output_directory if self.output_directory else os.path.dirname(self.current_file)
+            params["output_path"] = os.path.join(output_dir, frame_filename)
+            params["frame_number"] = frame_number
+            del params["output_dir"]
 
         self.set_ui_enabled(False)
         self.compression_worker = WorkerThread(self.processor, worker_mode, **params)
@@ -505,11 +644,19 @@ class MainWindow(QMainWindow):
 
     def on_finished(self, result):
         if self.batch_in_progress: self.completed_files_in_batch += 1
+        current_tab_text = self.operations_tabs.tabText(self.operations_tabs.currentIndex())
+        if current_tab_text == "Тест качества":
+            self.extract_frame_status.setText(f"Кадр сохранён: {os.path.basename(result)}")
+            self.extract_frame_status.setStyleSheet("color: green;")
         if not self.processing_stopped: self.process_next_file()
         else: self.on_canceled()
 
     def on_error(self, error):
         self.status_label.setText("Ошибка при обработке!")
+        current_tab_text = self.operations_tabs.tabText(self.operations_tabs.currentIndex())
+        if current_tab_text == "Тест качества":
+            self.extract_frame_status.setText("Ошибка при извлечении кадра!")
+            self.extract_frame_status.setStyleSheet("color: red;")
         if self.batch_in_progress: self.completed_files_in_batch += 1
         if not self.processing_stopped: self.process_next_file()
         else: self.on_canceled()

@@ -185,6 +185,54 @@ class VideoProcessor:
             logging.error(f"Exception during compression: {str(e)}")
             raise e
 
+    def extract_frame(self, input_path: str, frame_number: int, output_path: str,
+                      process_setter: Optional[Callable] = None) -> str:
+        """
+        Извлекает конкретный кадр из видео и сохраняет как изображение.
+        
+        Args:
+            input_path: Путь к видеофайлу.
+            frame_number: Номер кадра (начиная с 0).
+            output_path: Путь для сохранения изображения.
+            process_setter: Колбэк для установки ссылки на процесс.
+            
+        Returns:
+            Путь к сохранённому изображению.
+        """
+        logging.info(f"Извлечение кадра #{frame_number} из {input_path}")
+        
+        logging.debug(f"Получение информации о видео: {input_path}")
+        video_info = self.get_video_info(input_path)
+        if "error" in video_info:
+            logging.error(f"Ошибка получения информации о видео: {video_info['error']}")
+            raise Exception(video_info["error"])
+        
+        fps = video_info.get("fps", 0)
+        if fps <= 0:
+            logging.error(f"Недопустимое значение fps={fps} для {input_path}")
+            raise Exception("Не удалось определить частоту кадров видео")
+        
+        total_frames = int(video_info.get("duration", 0) * fps)
+        if frame_number < 0:
+            logging.error(f"Отрицательный номер кадра: {frame_number}")
+            raise Exception("Номер кадра не может быть отрицательным")
+        if frame_number >= total_frames:
+            logging.error(f"Кадр #{frame_number} выходит за пределы (всего кадров: ~{total_frames})")
+            raise Exception(f"Кадр #{frame_number} выходит за пределы видео (всего кадров: ~{total_frames})")
+        
+        logging.debug(f"Видео: fps={fps}, длительность={video_info.get('duration', 0)}с, всего кадров≈{total_frames}")
+        logging.debug(f"Вызов ffmpeg_handler.extract_frame -> {output_path}")
+        success, msg = self.ffmpeg_handler.extract_frame(
+            input_path, output_path, frame_number, fps, process_setter
+        )
+        
+        if not success:
+            logging.error(f"Ошибка извлечения кадра: {msg}")
+            raise Exception(f"Ошибка при извлечении кадра: {msg}")
+        
+        logging.info(f"Кадр #{frame_number} успешно сохранён в {output_path}")
+        return output_path
+
     def trim_video(self, input_path: str, seconds: float, from_start: bool, 
                    progress_callback: Optional[Callable] = None,
                    process_setter: Optional[Callable] = None,
