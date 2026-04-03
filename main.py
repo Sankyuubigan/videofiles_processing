@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
                                QTabWidget, QToolButton, QSpinBox)
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor
 from config import (OUTPUT_FORMATS, CODECS, DEFAULT_OUTPUT_FORMAT_KEY, 
                     DEFAULT_CODEC_KEY, DEFAULT_USE_HARDWARE_ENCODING, EXTRACTED_FRAME_SUFFIX)
 from video_processor import VideoProcessor
@@ -34,13 +34,17 @@ class MainWindow(QMainWindow):
         self.active_workers =[]
         self._cached_info = None
         self.processing_stopped = False
+        
         self.batch_in_progress = False
         self.total_files_in_batch = 0
         self.completed_files_in_batch = 0
+        
+        self.batch_test_in_progress = False
+        self.files_to_test = []
+        
         self.output_directory = None
         self.compression_start_time = None
         
-        # Значение кадра для вкладки "Тест качества" (единое для всей очереди)
         self.quality_test_frame_number = 0
         
         setup_logging(self.log_slot)
@@ -48,7 +52,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Video Compressor")
-        self.setGeometry(100, 100, 1200, 750)
+        self.setGeometry(100, 100, 1250, 750)
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
@@ -82,7 +86,7 @@ class MainWindow(QMainWindow):
         self.queue_table.setColumnCount(9)
         self.queue_table.setHorizontalHeaderLabels([
             "Имя файла", "Размер", "Длительность", "CRF", "Статус VFR", 
-            "Сложность", "Примерный размер", "Время сжатия", "Действия"
+            "Прим. размер (Разница)", "VMAF", "Время сжатия", "Действия"
         ])
         self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for i in range(1, 9):
@@ -291,14 +295,23 @@ class MainWindow(QMainWindow):
         process_group = QGroupBox("Запуск обработки")
         process_layout = QVBoxLayout()
         buttons_layout = QHBoxLayout()
+        
         self.process_btn = QPushButton("Начать")
         self.process_btn.clicked.connect(self.start_processing)
         self.process_btn.setEnabled(False)
+        
+        self.test_all_btn = QPushButton("Тест всех")
+        self.test_all_btn.clicked.connect(self.start_batch_test)
+        self.test_all_btn.setEnabled(False)
+        self.test_all_btn.setToolTip("Запустить тест сжатия для всех видео в очереди")
+        
         self.cancel_btn = QPushButton("Отменить")
         self.cancel_btn.clicked.connect(self.cancel_processing)
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.setVisible(False)
+        
         buttons_layout.addWidget(self.process_btn)
+        buttons_layout.addWidget(self.test_all_btn)
         buttons_layout.addWidget(self.cancel_btn)
         buttons_layout.addStretch()
         process_layout.addLayout(buttons_layout)
@@ -352,49 +365,167 @@ class MainWindow(QMainWindow):
             self.queue_table.setItem(row, 0, QTableWidgetItem(os.path.basename(file_path)))
             self.queue_table.setItem(row, 1, QTableWidgetItem(f"{info.get('size_mb', 0):.1f} МБ"))
             self.queue_table.setItem(row, 2, QTableWidgetItem(self.processor.size_estimator.format_duration(info.get("duration", 0))))
+            
+            # CRF Колонка (нет = зеленый, цифра = красный)
             crf_value = info.get('crf_value')
             crf_text = format_crf_display(crf_value)
-            logging.debug(f"Отображение CRF для {os.path.basename(file_path)}: crf_value={crf_value}, crf_text='{crf_text}'")
             crf_item = QTableWidgetItem(crf_text)
-            if crf_text == "нет":
-                crf_item.setForeground(Qt.GlobalColor.gray)
-            else:
-                crf_item.setForeground(Qt.GlobalColor.darkBlue)
+            crf_item.setForeground(Qt.GlobalColor.darkGreen if crf_text == "нет" else Qt.GlobalColor.red)
             self.queue_table.setItem(row, 3, crf_item)
+            
             vfr_item = QTableWidgetItem("Требуется" if info.get("needs_vfr_fix") else "Не требуется")
             vfr_item.setForeground(Qt.GlobalColor.red if info.get("needs_vfr_fix") else Qt.GlobalColor.darkGreen)
             self.queue_table.setItem(row, 4, vfr_item)
-            self.queue_table.setItem(row, 5, QTableWidgetItem(info.get('complexity_desc', 'Не определено')))
-            est_size = self.processor.estimated_size_mb(
-                video_bitrate=info.get("video_bitrate", 0), audio_bitrate=info.get("audio_bitrate", 128000),
-                duration=info["duration"], crf=self.crf_slider.value(), codec=self.current_codec(),
-                needs_vfr_fix=info.get("needs_vfr_fix", False) or self.vfr_checkbox.isChecked(),
-                use_hardware=self.hardware_radio.isChecked(), preset=self.current_preset(),
-                complexity_score=info.get('complexity_score', 5), width=info.get("width", 1920), height=info.get("height", 1080)
-            )
-            self.queue_table.setItem(row, 6, QTableWidgetItem(f"{est_size:.1f} МБ"))
-            time_formatted = self.processor.size_estimator.format_duration(self.processor.size_estimator.estimate_compression_time(
-                duration=info["duration"], width=info.get("width", 1920), height=info.get("height", 1080),
-                preset=self.current_preset(), codec=self.current_codec(), use_hardware=self.hardware_radio.isChecked()
-            ))
-            self.queue_table.setItem(row, 7, QTableWidgetItem(time_formatted))
+            
+            # Объединенный столбец Размер (Разница)
+            diff_text = info.get('test_diff', '')
+            est_size_text = info.get('test_est_size', '-')
+            if diff_text:
+                size_diff_text = f"{est_size_text} ({diff_text})"
+            else:
+                size_diff_text = "-"
+                
+            size_diff_item = QTableWidgetItem(size_diff_text)
+            if info.get('is_profitable', False):
+                size_diff_item.setForeground(Qt.GlobalColor.darkGreen)
+            elif diff_text:
+                size_diff_item.setForeground(Qt.GlobalColor.red)
+            self.queue_table.setItem(row, 5, size_diff_item)
+            
+            # Столбец VMAF
+            vmaf_val = info.get('test_vmaf', -1.0)
+            if vmaf_val == -2.0:
+                vmaf_text = "Нет libvmaf"
+                vmaf_color = Qt.GlobalColor.gray
+            elif vmaf_val >= 0:
+                vmaf_text = f"{vmaf_val:.1f}"
+                if vmaf_val >= 93:
+                    vmaf_color = Qt.GlobalColor.darkGreen
+                elif vmaf_val >= 80:
+                    vmaf_color = QColor(255, 140, 0) # Оранжевый/Желтый
+                else:
+                    vmaf_color = Qt.GlobalColor.red
+            else:
+                vmaf_text = "-"
+                vmaf_color = Qt.GlobalColor.black
+                
+            vmaf_item = QTableWidgetItem(vmaf_text)
+            if vmaf_text != "-":
+                vmaf_item.setForeground(vmaf_color)
+            self.queue_table.setItem(row, 6, vmaf_item)
+            
+            self.queue_table.setItem(row, 7, QTableWidgetItem(info.get('test_est_time', '-')))
             
             actions_widget = QWidget()
             actions_layout = QHBoxLayout(actions_widget)
             actions_layout.setContentsMargins(2, 2, 2, 2)
+            
+            test_btn = QToolButton()
+            test_btn.setText("🧪")
+            test_btn.setToolTip("Запустить тест сжатия (определить выгоду и время)")
+            test_btn.setProperty("file_path", file_path)
+            test_btn.clicked.connect(self.on_chunk_test_clicked)
+            
             info_btn = QToolButton()
             info_btn.setText("ℹ")
             info_btn.setProperty("video_info", info)
             info_btn.clicked.connect(self.on_info_button_clicked)
+            
             delete_btn = QToolButton()
             delete_btn.setText("✕")
             delete_btn.setProperty("file_path", file_path)
             delete_btn.clicked.connect(self.on_delete_button_clicked)
+            
+            actions_layout.addWidget(test_btn)
             actions_layout.addWidget(info_btn)
             actions_layout.addWidget(delete_btn)
             actions_layout.addStretch()
             self.queue_table.setCellWidget(row, 8, actions_widget)
         self.queue_table.viewport().update()
+
+    def start_batch_test(self):
+        if not self.current_file: return
+        
+        self.files_to_test = []
+        if self.current_file:
+            self.files_to_test.append(self.current_file)
+        for path, _ in self.file_queue:
+            self.files_to_test.append(path)
+            
+        self.batch_test_in_progress = True
+        self.processing_stopped = False
+        self.process_next_test()
+
+    def process_next_test(self):
+        if self.processing_stopped or not self.files_to_test:
+            self.batch_test_in_progress = False
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100 if not self.processing_stopped else 0)
+            self.status_label.setText("Тестирование всех файлов завершено" if not self.processing_stopped else "Отменено")
+            self.set_ui_enabled(True)
+            return
+            
+        next_file = self.files_to_test.pop(0)
+        self.start_chunk_test(next_file)
+
+    def on_chunk_test_clicked(self):
+        button = self.sender()
+        if button and button.property("file_path"):
+            file_path = button.property("file_path")
+            self.batch_test_in_progress = False # Сброс, так как это одиночный запуск
+            self.start_chunk_test(file_path)
+
+    def start_chunk_test(self, file_path):
+        self.set_ui_enabled(False)
+        self.status_label.setText(f"Выполняется тест фрагментов для {os.path.basename(file_path)}...")
+        self.progress_bar.setRange(0, 0)
+
+        params = {
+            "input_path": file_path,
+            "codec": self.codec_combo.currentData(),
+            "crf_value": self.crf_slider.value(),
+            "preset_value": self.preset_combo.currentData(),
+            "use_hardware": self.hardware_radio.isChecked()
+        }
+
+        self.compression_worker = WorkerThread(self.processor, "chunk_test", **params)
+        self.compression_worker.finished.connect(self.on_chunk_test_finished)
+        self.compression_worker.error_occurred.connect(self.on_chunk_test_error)
+        self.active_workers.append(self.compression_worker)
+        self.compression_worker.start()
+
+    def on_chunk_test_finished(self, result):
+        if type(result) == dict and "file_path" in result:
+            file_path = result["file_path"]
+            if self.current_file == file_path:
+                self.current_info.update(result)
+            else:
+                for q_path, q_info in self.file_queue:
+                    if q_path == file_path:
+                        q_info.update(result)
+                        break
+
+        self.update_queue_table()
+        
+        if self.batch_test_in_progress:
+            self.process_next_test()
+        else:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100)
+            self.status_label.setText("Тест успешно завершен")
+            self.set_ui_enabled(True)
+
+    def on_chunk_test_error(self, error):
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        
+        if self.batch_test_in_progress:
+            self.log_slot(f"Ошибка теста: {error}")
+            self.process_next_test() # Пропускаем файл с ошибкой и идем дальше
+        else:
+            self.status_label.setText("Ошибка при тестировании!")
+            QMessageBox.critical(self, "Ошибка теста", f"Не удалось выполнить тест:\n{error}")
+            self.set_ui_enabled(True)
 
     def on_info_button_clicked(self):
         button = self.sender()
@@ -416,6 +547,7 @@ class MainWindow(QMainWindow):
                 self.set_ui_enabled(True) 
                 self.file_label.setText("Перетащите файлы сюда или нажмите 'Выбрать'")
                 self.process_btn.setEnabled(False)
+                self.test_all_btn.setEnabled(False)
                 self.vfr_status_label.setText("Статус VFR: Не определено")
         else:
             try:
@@ -436,6 +568,7 @@ class MainWindow(QMainWindow):
     def set_current_file(self, file_path, file_info):
         self.file_label.setText(f"Текущий файл: {os.path.basename(file_path)}")
         self.process_btn.setEnabled(True)
+        self.test_all_btn.setEnabled(True)
         self._cached_info = file_info
         self.check_vfr_status()
         self.operations_tabs.setTabEnabled(0, file_info.get("is_video", True))
@@ -474,14 +607,12 @@ class MainWindow(QMainWindow):
         self.crf_slider.setRange(codec_details["crf_min"], codec_details["crf_max"])
         self.crf_slider.setValue(codec_details["crf_default"])
         self.on_crf_changed(codec_details["crf_default"])
-        self.update_queue_table()
 
-    def on_preset_changed(self): self.update_queue_table()
-    def on_encoding_changed(self): self.update_queue_table()
+    def on_preset_changed(self): pass
+    def on_encoding_changed(self): pass
 
     def on_crf_changed(self, value):
         self.crf_label.setText("CRF: только VFR-fix (copy)" if value == self.crf_slider.minimum() else f"CRF: {value}")
-        self.update_queue_table()
 
     def check_vfr_status(self):
         if self.current_file:
@@ -490,8 +621,6 @@ class MainWindow(QMainWindow):
             self.vfr_status_label.setStyleSheet("color: orange;" if needs_fix else "color: green;")
 
     def update_quality_test_tab(self, file_info):
-        """Обновляет информацию о кадрах на вкладке 'Тест качества'."""
-        logging.debug(f"Обновление вкладки 'Тест качества': fps={file_info.get('fps', 0)}, duration={file_info.get('duration', 0)}")
         fps = file_info.get("fps", 0)
         duration = file_info.get("duration", 0)
         if fps > 0 and duration > 0:
@@ -499,52 +628,37 @@ class MainWindow(QMainWindow):
             self.quality_fps_label.setText(f"FPS видео: {fps:.3f}")
             self.quality_total_frames_label.setText(f"Всего кадров: ~{total_frames} (макс. номер: {total_frames - 1})")
             self.frame_number_spin.setRange(0, total_frames - 1)
-            # Не сбрасываем значение — используем единое для всей очереди
-            # Если введённое значение превышает максимум текущего файла, корректируем
             if self.quality_test_frame_number > total_frames - 1:
                 self.quality_test_frame_number = total_frames - 1
-            # Отключаем сигнал, чтобы setValue не вызвал on_quality_test_frame_changed
             self.frame_number_spin.blockSignals(True)
             self.frame_number_spin.setValue(self.quality_test_frame_number)
             self.frame_number_spin.blockSignals(False)
             self.extract_frame_status.setText("")
-            logging.debug(f"Вкладка обновлена: {total_frames} кадров, кадр={self.quality_test_frame_number}")
         else:
             self.quality_fps_label.setText("FPS видео: —")
             self.quality_total_frames_label.setText("Всего кадров: —")
             self.frame_number_spin.setRange(0, 999999)
             self.extract_frame_status.setText("Невозможно определить количество кадров")
-            logging.warning(f"Невозможно обновить вкладку: некорректные fps={fps} или duration={duration}")
 
     def on_quality_test_frame_changed(self, value):
-        """Сохраняет введённый номер кадра как единый для всей очереди."""
         self.quality_test_frame_number = value
-        logging.debug(f"Номер кадра для теста качества изменён на {value} (единый для очереди)")
 
     def extract_frame_action(self):
-        """Извлекает указанный кадр и сохраняет в папку с видео."""
         if not self.current_file:
-            logging.warning("extract_frame_action: не выбран видеофайл")
             QMessageBox.warning(self, "Ошибка", "Не выбран видеофайл.")
             return
         
         frame_number = self.frame_number_spin.value()
-        logging.info(f"Запуск извлечения кадра #{frame_number} из {self.current_file}")
-        
-        # Формируем имя файла: <имя_видео>_frame_<кодек>_crf<crf>_frame<номер>.jpg
         video_name = os.path.splitext(os.path.basename(self.current_file))[0]
         codec = self._cached_info.get('video_codec', 'unknown')
         crf_val = self._cached_info.get('crf_value')
         crf_str = f"crf{int(crf_val)}" if crf_val is not None else "crfunknown"
         frame_filename = f"{video_name}{EXTRACTED_FRAME_SUFFIX}_{codec}_{crf_str}_frame{frame_number:06d}.jpg"
         output_path = os.path.join(os.path.dirname(self.current_file), frame_filename)
-        logging.debug(f"Путь сохранения кадра: {output_path}")
         
         self.extract_frame_status.setText("Извлечение кадра...")
         self.extract_frame_status.setStyleSheet("color: orange;")
         
-        # Запускаем в потоке
-        logging.debug(f"Создание WorkerThread для extract_frame")
         self.compression_worker = WorkerThread(
             self.processor, "extract_frame",
             input_path=self.current_file,
@@ -555,19 +669,14 @@ class MainWindow(QMainWindow):
         self.compression_worker.finished.connect(self.on_extract_frame_finished)
         self.compression_worker.error_occurred.connect(self.on_extract_frame_error)
         self.active_workers.append(self.compression_worker)
-        logging.debug(f"Запуск WorkerThread для извлечения кадра")
         self.compression_worker.start()
 
     def on_extract_frame_finished(self, result):
-        """Обработка успешного извлечения кадра."""
-        logging.info(f"Кадр успешно извлечён и сохранён: {result}")
         self.extract_frame_status.setText(f"Кадр сохранён: {os.path.basename(result)}")
         self.extract_frame_status.setStyleSheet("color: green;")
         QMessageBox.information(self, "Готово", f"Кадр успешно сохранён:\n{result}")
 
     def on_extract_frame_error(self, error):
-        """Обработка ошибки при извлечении кадра."""
-        logging.error(f"Ошибка при извлечении кадра: {error}")
         self.extract_frame_status.setText("Ошибка при извлечении кадра!")
         self.extract_frame_status.setStyleSheet("color: red;")
         QMessageBox.critical(self, "Ошибка", f"Не удалось извлечь кадр:\n{error}")
@@ -626,6 +735,8 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(1000, self.on_canceled)
 
     def on_canceled(self):
+        self.batch_test_in_progress = False
+        self.files_to_test = []
         self.status_label.setText("Отменено")
         self.progress_bar.setValue(0)
         self.batch_in_progress = False
@@ -684,10 +795,18 @@ class MainWindow(QMainWindow):
     def set_ui_enabled(self, enabled):
         self.select_file_btn.setEnabled(enabled)
         self.process_btn.setEnabled(enabled and self.current_file is not None)
+        self.test_all_btn.setEnabled(enabled and self.current_file is not None)
         self.cancel_btn.setEnabled(not enabled and self.current_file is not None)
         self.cancel_btn.setVisible(not enabled and self.current_file is not None)
         self.operations_tabs.setEnabled(enabled)
         self.output_dir_btn.setEnabled(enabled)
+        
+        # Блокируем кнопки теста во время обработки
+        for i in range(self.queue_table.rowCount()):
+            widget = self.queue_table.cellWidget(i, 8)
+            if widget:
+                for child in widget.findChildren(QToolButton):
+                    child.setEnabled(enabled)
 
     def log_slot(self, message):
         if hasattr(self, 'log_text'):

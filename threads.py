@@ -4,7 +4,7 @@ from PySide6.QtCore import QThread, Signal
 
 class WorkerThread(QThread):
     progress_updated = Signal(int, str)
-    finished = Signal(str)
+    finished = Signal(object)  # Изменено на object, чтобы передавать словари
     error_occurred = Signal(str)
     info_ready = Signal(dict)
 
@@ -50,6 +50,12 @@ class WorkerThread(QThread):
                     **self.kwargs
                 )
                 self.finished.emit(result)
+            elif self.mode == 'chunk_test':
+                result = self.processor.run_chunk_test(
+                    process_setter=self.set_process,
+                    **self.kwargs
+                )
+                self.finished.emit(result)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -64,21 +70,16 @@ class WorkerThread(QThread):
         if self.process:
             try:
                 self.process.terminate()
-                # Даем процессу время на завершение
                 try:
                     self.process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    # Если процесс не завершился, принудительно убиваем
                     self.process.kill()
-                    # Даем время на принудительное завершение
                     try:
                         self.process.wait(timeout=2)
                     except subprocess.TimeoutExpired:
-                        # Если и это не помогло, пробуем завершить через taskkill (Windows)
                         import platform
                         if platform.system() == "Windows":
                             import os
                             os.system(f"taskkill /F /T /PID {self.process.pid}")
             except Exception:
-                # Игнорируем другие ошибки при остановке
                 pass

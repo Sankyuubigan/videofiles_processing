@@ -2,6 +2,9 @@
 Основной класс для обработки видео
 """
 import logging
+import time
+import tempfile
+import os
 from pathlib import Path
 from typing import Optional, Callable
 from config import COMPRESSED_VIDEO_SUFFIX, TRIMMED_VIDEO_SUFFIX
@@ -54,36 +57,12 @@ class VideoProcessor:
         if "error" in video_info:
             return video_info
         
-        # Добавляем расчетные параметры
         gpu_info = self.get_gpu_info()
         complexity_score, complexity_desc = self.estimate_video_complexity(video_info)
         
-        # Расчет примерного размера с учетом сложности и правильных параметров
-        width = video_info.get("width", 1920)
-        height = video_info.get("height", 1080)
-        
-        est_size = self.estimated_size_mb(
-            video_bitrate=video_info.get("video_bitrate", 0), 
-            audio_bitrate=video_info.get("audio_bitrate", 128000), 
-            duration=video_info.get("duration", 0), 
-            crf=24, 
-            codec="libx264", 
-            needs_vfr_fix=video_info.get("needs_vfr_fix", False), 
-            use_hardware=False,
-            preset="slow",  # Используем "slow" по умолчанию
-            complexity_score=complexity_score,
-            width=width,
-            height=height
-        )
-        
-        # Извлечение CRF из метаданных файла
-        logging.debug(f"Вызов get_crf_from_file для: {input_path}")
         crf_value = get_crf_from_file(input_path)
-        logging.info(f"Получено crf_value для {input_path}: {crf_value}")
         
-        # Добавляем вычисленные поля в информацию
         video_info.update({
-            "estimated_size_mb": est_size,
             "gpu_info": gpu_info,
             "processing_mode": "GPU" if "Доступные GPU" in gpu_info else "CPU",
             "complexity_score": complexity_score,
@@ -93,33 +72,103 @@ class VideoProcessor:
         
         return video_info
     
+    def run_chunk_test(self, input_path: str, codec: str, crf_value: int, preset_value: str,
+                       use_hardware: bool, process_setter: Optional[Callable] = None) -> dict:
+        """Алгоритм тестовых фрагментов (Chunk Testing) для точного определения выгоды сжатия."""
+        logging.info(f"Запуск алгоритма Chunk Test для {input_path}")
+        video_info = self.get_video_info(input_path)
+        if "error" in video_info:
+            raise Exception(video_info["error"])
+
+        duration = video_info.get("duration", 0)
+        if duration < 30:
+            raise Exception("Видео слишком короткое для теста (нужно минимум 30 секунд)")
+
+        # Нарезаем 3 куска по 10 секунд (на 10%, 50% и 80% длительности фильма)
+        chunk_duration = 10
+        timestamps = [duration * 0.1, duration * 0.5, duration * 0.8]
+        temp_dir = tempfile.gettempdir()
+        total_size_bytes = 0
+        
+        vmaf_scores = []
+        libvmaf_missing = False
+        
+        start_time = time.time()
+
+        for i, ts in enumerate(timestamps):
+            out_path = os.path.join(temp_dir, f"chunk_test_{i}.mp4")
+            logging.debug(f"Кодирование фрагмента {i+1}/3 на отметке {ts:.1f} сек...")
+            success, msg = self.ffmpeg_handler.encode_chunk(
+                input_path, out_path, ts, chunk_duration, codec, crf_value, preset_value, use_hardware, process_setter
+            )
+            if not success:
+                raise Exception(f"Ошибка при кодировании фрагмента {i+1}: {msg}")
+            
+            if os.path.exists(out_path):
+                # Считаем VMAF
+                if not libvmaf_missing:
+                    logging.debug(f"Расчет VMAF для фрагмента {i+1}...")
+                    vmaf = self.ffmpeg_handler.calculate_vmaf(input_path, out_path, ts, chunk_duration, process_setter)
+                    if vmaf == -2.0:
+                        libvmaf_missing = True
+                    elif vmaf >= 0:
+                        vmaf_scores.append(vmaf)
+                
+                total_size_bytes += os.path.getsize(out_path)
+                os.remove(out_path) # Удаляем временный файл сразу
+
+        total_time_taken = time.time() - start_time
+        total_chunk_duration = chunk_duration * len(timestamps) # 30 секунд
+
+        # Математика экстраполяции
+        chunk_bitrate_bps = (total_size_bytes * 8) / total_chunk_duration
+        est_size_mb = (chunk_bitrate_bps * duration) / 8 / (1024 * 1024)
+        
+        speed_multiplier = total_chunk_duration / total_time_taken
+        est_time_sec = duration / speed_multiplier
+
+        orig_size_mb = video_info.get("size_mb", 0)
+        diff_percent = 0
+        if orig_size_mb > 0:
+            diff_percent = ((orig_size_mb - est_size_mb) / orig_size_mb) * 100
+
+        # Форматирование вывода
+        if diff_percent > 0:
+            diff_str = f"-{diff_percent:.1f}%"
+        else:
+            diff_str = f"+{abs(diff_percent):.1f}%"
+            
+        avg_vmaf = sum(vmaf_scores) / len(vmaf_scores) if vmaf_scores else -1.0
+        if libvmaf_missing:
+            avg_vmaf = -2.0
+
+        logging.info(f"Chunk Test завершен: выгода {diff_str}, примерный размер {est_size_mb:.1f} МБ, VMAF: {avg_vmaf:.1f}")
+
+        return {
+            "file_path": input_path,
+            "test_diff": diff_str,
+            "test_est_size": f"{est_size_mb:.1f} МБ",
+            "test_est_time": self.size_estimator.format_duration(est_time_sec),
+            "test_vmaf": avg_vmaf,
+            "is_profitable": diff_percent > 0
+        }
+
     def compress_video(self, input_path: str, output_format: str, codec: str, crf_value: int,
                     preset_value: str, force_vfr_fix: bool, use_hardware: bool = False, 
                     progress_callback: Optional[Callable] = None,
                     process_setter: Optional[Callable] = None,
                     output_dir: Optional[str] = None) -> str:
         """Основной метод сжатия видео"""
-        logging.debug(f"Starting compression:")
-        logging.debug(f"   Input: {input_path}")
-        logging.debug(f"   Output format: {output_format}")
-        logging.debug(f"   Codec: {codec}")
-        logging.debug(f"   CRF: {crf_value}")
-        logging.debug(f"   Preset: {preset_value}")
-        logging.debug(f"   Force VFR fix: {force_vfr_fix}")
-        logging.debug(f"   Hardware encoding: {use_hardware}")
-        
         input_p = Path(input_path)
         if progress_callback: 
             progress_callback(5, "Анализ видео...")
         
         video_info = self.get_video_info(input_path)
         if "error" in video_info: 
-            logging.error(f"Error getting video info: {video_info['error']}")
             raise Exception(video_info["error"])
         
         duration = video_info.get("duration", 0)
         if duration <= 0:
-            logging.error(f"Invalid video duration: {duration}")
             raise Exception("Некорректная длительность видео")
         
         needs_fix = force_vfr_fix or video_info["needs_vfr_fix"]
@@ -129,19 +178,15 @@ class VideoProcessor:
         else:
             output_path = input_p.with_name(f"{input_p.stem}{COMPRESSED_VIDEO_SUFFIX}.{output_format}")
         
-        logging.debug(f"Output file will be: {output_path}")
-        
         if output_path.exists():
             try:
                 output_path.unlink()
-                logging.debug(f"Deleted existing file: {output_path}")
             except Exception as e:
                 logging.error(f"Error deleting existing file: {e}")
         
         current_input = input_path
         try:
             if needs_fix:
-                logging.debug(f"VFR fix is needed")
                 def vfr_progress(p, m): 
                     progress_callback(p, m) if progress_callback else None
                 success, msg = self.ffmpeg_handler.fix_vfr_target_crf(
@@ -149,11 +194,9 @@ class VideoProcessor:
                     preset_value, vfr_progress, duration, use_hardware, video_info, process_setter
                 )
                 if not success: 
-                    logging.error(f"VFR fix failed: {msg}")
                     raise Exception(f"Ошибка VFR-fix: {msg}")
                 current_input = str(output_path)
             else:
-                logging.debug(f"No VFR fix needed, proceeding with compression")
                 def compress_progress(p, m): 
                     progress_callback(p, m) if progress_callback else None
                 success, msg = self.ffmpeg_handler.compress_video_core(
@@ -161,76 +204,47 @@ class VideoProcessor:
                     preset_value, compress_progress, duration, video_info, use_hardware, process_setter
                 )
                 if not success: 
-                    logging.error(f"Compression failed: {msg}")
-                    logging.debug(f"Trying alternative method without subtitles...")
                     success, msg = self.ffmpeg_handler.compress_video_core_no_subtitles(
                         current_input, str(output_path), output_format, codec, crf_value, 
                         preset_value, compress_progress, duration, video_info, use_hardware, process_setter
                     )
                     if not success:
-                        logging.error(f"Alternative method failed: {msg}")
-                        logging.debug(f"Trying last method with full mapping but no data...")
                         success, msg = self.ffmpeg_handler.compress_video_core_full_map(
                             current_input, str(output_path), output_format, codec, crf_value, 
                             preset_value, compress_progress, duration, video_info, use_hardware, process_setter
                         )
                         if not success:
-                            logging.error(f"All methods failed: {msg}")
                             raise Exception(f"Ошибка сжатия: {msg}")
             if progress_callback: 
                 progress_callback(100, "Готово!")
-            logging.debug(f"Compression completed successfully")
             return str(output_path)
         except Exception as e:
-            logging.error(f"Exception during compression: {str(e)}")
             raise e
 
     def extract_frame(self, input_path: str, frame_number: int, output_path: str,
                       process_setter: Optional[Callable] = None) -> str:
-        """
-        Извлекает конкретный кадр из видео и сохраняет как изображение.
-        
-        Args:
-            input_path: Путь к видеофайлу.
-            frame_number: Номер кадра (начиная с 0).
-            output_path: Путь для сохранения изображения.
-            process_setter: Колбэк для установки ссылки на процесс.
-            
-        Returns:
-            Путь к сохранённому изображению.
-        """
-        logging.info(f"Извлечение кадра #{frame_number} из {input_path}")
-        
-        logging.debug(f"Получение информации о видео: {input_path}")
+        """Извлекает конкретный кадр из видео и сохраняет как изображение."""
         video_info = self.get_video_info(input_path)
         if "error" in video_info:
-            logging.error(f"Ошибка получения информации о видео: {video_info['error']}")
             raise Exception(video_info["error"])
         
         fps = video_info.get("fps", 0)
         if fps <= 0:
-            logging.error(f"Недопустимое значение fps={fps} для {input_path}")
             raise Exception("Не удалось определить частоту кадров видео")
         
         total_frames = int(video_info.get("duration", 0) * fps)
         if frame_number < 0:
-            logging.error(f"Отрицательный номер кадра: {frame_number}")
             raise Exception("Номер кадра не может быть отрицательным")
         if frame_number >= total_frames:
-            logging.error(f"Кадр #{frame_number} выходит за пределы (всего кадров: ~{total_frames})")
             raise Exception(f"Кадр #{frame_number} выходит за пределы видео (всего кадров: ~{total_frames})")
         
-        logging.debug(f"Видео: fps={fps}, длительность={video_info.get('duration', 0)}с, всего кадров≈{total_frames}")
-        logging.debug(f"Вызов ffmpeg_handler.extract_frame -> {output_path}")
         success, msg = self.ffmpeg_handler.extract_frame(
             input_path, output_path, frame_number, fps, process_setter
         )
         
         if not success:
-            logging.error(f"Ошибка извлечения кадра: {msg}")
             raise Exception(f"Ошибка при извлечении кадра: {msg}")
         
-        logging.info(f"Кадр #{frame_number} успешно сохранён в {output_path}")
         return output_path
 
     def trim_video(self, input_path: str, seconds: float, from_start: bool, 
@@ -238,10 +252,7 @@ class VideoProcessor:
                    process_setter: Optional[Callable] = None,
                    output_dir: Optional[str] = None) -> str:
         """Метод для сокращения видео"""
-        logging.debug(f"Starting trim operation: remove {seconds}s from {'start' if from_start else 'end'}")
-        
         input_p = Path(input_path)
-        
         if progress_callback:
             progress_callback(5, "Анализ длительности...")
             
@@ -256,13 +267,10 @@ class VideoProcessor:
         if seconds >= total_duration:
             raise Exception("Количество удаляемых секунд больше или равно длительности видео")
             
-        # Рассчитываем параметры обрезки
         if from_start:
-            # Удаляем с начала: старт сдвигается, длительность уменьшается
             start_time = seconds
             new_duration = total_duration - seconds
         else:
-            # Удаляем с конца: старт 0, длительность уменьшается
             start_time = 0
             new_duration = total_duration - seconds
             
@@ -275,7 +283,7 @@ class VideoProcessor:
             try:
                 output_path.unlink()
             except Exception as e:
-                logging.error(f"Error deleting existing file: {e}")
+                pass
         
         def trim_progress(p, m):
             progress_callback(p, m) if progress_callback else None
@@ -298,10 +306,7 @@ class VideoProcessor:
                                 process_setter: Optional[Callable] = None,
                                 output_dir: Optional[str] = None) -> str:
         """Метод для нормализации громкости аудио"""
-        logging.debug(f"Starting audio volume normalization: {input_path}")
-        
         input_p = Path(input_path)
-        
         if output_dir:
             output_path = Path(output_dir) / f"{input_p.stem}_volnorm{input_p.suffix}"
         else:
@@ -311,7 +316,7 @@ class VideoProcessor:
             try:
                 output_path.unlink()
             except Exception as e:
-                logging.error(f"Error deleting existing file: {e}")
+                pass
         
         def norm_progress(p, m):
             progress_callback(p, m) if progress_callback else None
