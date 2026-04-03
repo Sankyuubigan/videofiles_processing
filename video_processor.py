@@ -11,6 +11,7 @@ from config import COMPRESSED_VIDEO_SUFFIX, TRIMMED_VIDEO_SUFFIX
 from video_size_estimator import VideoSizeEstimator
 from ffmpeg_handler import FFmpegHandler
 from crf_extractor import get_crf_from_file
+from settings_manager import load_settings
 
 
 class VideoProcessor:
@@ -81,58 +82,78 @@ class VideoProcessor:
             raise Exception(video_info["error"])
 
         duration = video_info.get("duration", 0)
-        if duration < 30:
-            raise Exception("Видео слишком короткое для теста (нужно минимум 30 секунд)")
+        
+        # Получаем настройки
+        settings = load_settings()
+        chunk_count = settings.get("chunk_count", 3)
+        chunk_duration = settings.get("chunk_duration", 10)
+        vmaf_subsample = settings.get("vmaf_subsample", 5)
 
-        # Нарезаем 3 куска по 10 секунд (на 10%, 50% и 80% длительности фильма)
-        chunk_duration = 10
-        timestamps = [duration * 0.1, duration * 0.5, duration * 0.8]
+        # Вычисляем таймкоды
+        if duration < 30:
+            chunk_count = 1
+            chunk_duration = min(10, duration * 0.5)
+            timestamps = [duration * 0.5]
+        else:
+            if chunk_count == 1: timestamps = [duration * 0.5]
+            elif chunk_count == 2: timestamps = [duration * 0.2, duration * 0.8]
+            elif chunk_count == 3: timestamps = [duration * 0.1, duration * 0.5, duration * 0.8]
+            elif chunk_count == 4: timestamps = [duration * 0.1, duration * 0.35, duration * 0.6, duration * 0.85]
+            else: timestamps = [duration * 0.1, duration * 0.3, duration * 0.5, duration * 0.7, duration * 0.9]
+
         temp_dir = tempfile.gettempdir()
         total_size_bytes = 0
         
         vmaf_scores = []
         libvmaf_missing = False
         
-        start_time = time.time()
+        encode_time_total = 0.0
 
         for i, ts in enumerate(timestamps):
             out_path = os.path.join(temp_dir, f"chunk_test_{i}.mp4")
-            logging.debug(f"Кодирование фрагмента {i+1}/3 на отметке {ts:.1f} сек...")
+            logging.debug(f"Кодирование фрагмента {i+1}/{chunk_count} на отметке {ts:.1f} сек...")
+            
+            # Замеряем ТОЛЬКО время кодирования
+            start_encode = time.time()
             success, msg = self.ffmpeg_handler.encode_chunk(
                 input_path, out_path, ts, chunk_duration, codec, crf_value, preset_value, use_hardware, process_setter
             )
+            encode_time_total += (time.time() - start_encode)
+            
             if not success:
                 raise Exception(f"Ошибка при кодировании фрагмента {i+1}: {msg}")
             
             if os.path.exists(out_path):
-                # Считаем VMAF
+                # Считаем VMAF (время не учитывается в расчете скорости кодирования)
                 if not libvmaf_missing:
                     logging.debug(f"Расчет VMAF для фрагмента {i+1}...")
-                    vmaf = self.ffmpeg_handler.calculate_vmaf(input_path, out_path, ts, chunk_duration, process_setter)
+                    vmaf = self.ffmpeg_handler.calculate_vmaf(input_path, out_path, ts, chunk_duration, vmaf_subsample, process_setter)
                     if vmaf == -2.0:
                         libvmaf_missing = True
                     elif vmaf >= 0:
                         vmaf_scores.append(vmaf)
                 
                 total_size_bytes += os.path.getsize(out_path)
-                os.remove(out_path) # Удаляем временный файл сразу
+                os.remove(out_path)
 
-        total_time_taken = time.time() - start_time
-        total_chunk_duration = chunk_duration * len(timestamps) # 30 секунд
+        total_chunk_duration = chunk_duration * len(timestamps)
 
         # Математика экстраполяции
         chunk_bitrate_bps = (total_size_bytes * 8) / total_chunk_duration
         est_size_mb = (chunk_bitrate_bps * duration) / 8 / (1024 * 1024)
         
-        speed_multiplier = total_chunk_duration / total_time_taken
-        est_time_sec = duration / speed_multiplier
+        # Исправлено: используем только время кодирования, а не общее время с VMAF
+        if encode_time_total > 0:
+            speed_multiplier = total_chunk_duration / encode_time_total
+            est_time_sec = duration / speed_multiplier
+        else:
+            est_time_sec = 0
 
         orig_size_mb = video_info.get("size_mb", 0)
         diff_percent = 0
         if orig_size_mb > 0:
             diff_percent = ((orig_size_mb - est_size_mb) / orig_size_mb) * 100
 
-        # Форматирование вывода
         if diff_percent > 0:
             diff_str = f"-{diff_percent:.1f}%"
         else:

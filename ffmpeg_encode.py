@@ -126,18 +126,17 @@ class FFmpegEncodeMixin:
         cmd.extend(["-c:a", "aac", "-b:a", "192k", output_path])
         return self._run_command_simple(cmd, process_setter)
 
-    def calculate_vmaf(self, original_path: str, chunk_path: str, start_time: float, duration: float, process_setter: Optional[Callable] = None) -> float:
+    def calculate_vmaf(self, original_path: str, chunk_path: str, start_time: float, duration: float, n_subsample: int = 5, process_setter: Optional[Callable] = None) -> float:
         """Рассчитывает VMAF оценку (0-100) между оригинальным куском и сжатым."""
         json_filename = f"vmaf_{os.getpid()}_{int(time.time() * 1000)}.json"
         json_path = os.path.join(tempfile.gettempdir(), json_filename)
-        # Экранируем двоеточия для FFmpeg фильтров на Windows (например C\: -> C\:)
         json_path_ff = json_path.replace('\\', '/').replace(':', '\\:')
         
         cmd = [
             self.ffmpeg_path, "-y",
             "-ss", str(start_time), "-t", str(duration), "-i", original_path,
             "-i", chunk_path,
-            "-filter_complex", f"[1:v]setpts=PTS-STARTPTS[dist];[0:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=log_fmt=json:log_path='{json_path_ff}'",
+            "-filter_complex", f"[1:v]setpts=PTS-STARTPTS[dist];[0:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=log_fmt=json:log_path='{json_path_ff}':n_subsample={n_subsample}",
             "-f", "null", "-"
         ]
         
@@ -165,7 +164,7 @@ class FFmpegEncodeMixin:
                     data = json.load(f)
                     if 'pooled_metrics' in data and 'vmaf' in data['pooled_metrics']:
                         score = data['pooled_metrics']['vmaf']['mean']
-                    elif 'VMAF score' in data: # Для старых версий libvmaf
+                    elif 'VMAF score' in data:
                         score = data['VMAF score']
             except Exception as e:
                 logging.error(f"Failed to parse VMAF JSON: {e}")
@@ -178,7 +177,7 @@ class FFmpegEncodeMixin:
         if score == -1.0:
             if "No such filter: 'libvmaf'" in full_output:
                 logging.warning("libvmaf не встроен в эту сборку FFmpeg.")
-                return -2.0 # Спец-код для отсутствия VMAF
+                return -2.0
             logging.error(f"Ошибка расчета VMAF. Лог FFmpeg:\n{full_output}")
             
         return score

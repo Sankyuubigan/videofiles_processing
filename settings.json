@@ -1,10 +1,13 @@
 {
     "ffmpeg_path": "./",
     "yt_dlp_path": "./yt_dlp",
-    "download_path": "E:/Downloads",
-    "auth_mode": "file",
+    "download_path": "",
+    "auth_mode": "none",
     "auth_browser": "chrome",
-    "cookies_file": "D:/Projects/videofile_pro/cookies/cookies_chegevara.txt",
+    "cookies_file": "",
     "download_format": 0,
-    "download_quality": 1
+    "download_quality": 0,
+    "vmaf_subsample": 5,
+    "chunk_count": 3,
+    "chunk_duration": 10
 }

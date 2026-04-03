@@ -17,7 +17,10 @@ DEFAULT_SETTINGS = {
     "auth_browser": "chrome",
     "cookies_file": "",
     "download_format": 0,
-    "download_quality": 0
+    "download_quality": 0,
+    "vmaf_subsample": 5,
+    "chunk_count": 3,
+    "chunk_duration": 10
 }
 
 _settings_cache = None
@@ -31,7 +34,6 @@ def load_settings():
         try:
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                 _settings_cache = json.load(f)
-                # Дополняем отсутствующие ключи дефолтными
                 for k, v in DEFAULT_SETTINGS.items():
                     if k not in _settings_cache:
                         _settings_cache[k] = v
