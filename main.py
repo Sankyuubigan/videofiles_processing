@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QRadioButton, QButtonGroup,
                                QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
                                QTabWidget, QToolButton, QSpinBox)
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor
 from config import (OUTPUT_FORMATS, CODECS, DEFAULT_OUTPUT_FORMAT_KEY, 
@@ -77,8 +78,15 @@ class MainWindow(QMainWindow):
         self.download_tab = DownloadTab()
         self.tab_widget.addTab(self.download_tab, "Скачать видео")
 
+        self.help_tab = QWidget()
+        self.tab_widget.addTab(self.help_tab, "Справка")
+        help_layout = QVBoxLayout(self.help_tab)
+        self.help_view = QWebEngineView()
+        help_layout.addWidget(self.help_view)
+        self._load_help_content()
+
         file_group = self.create_file_group()
-        main_tab_layout.addWidget(file_group)
+        main_tab_layout.addWidget(file_group, 0)  # stretch=0 — не растягивается
 
         queue_group = QGroupBox("Очередь файлов")
         queue_layout = QVBoxLayout()
@@ -96,7 +104,7 @@ class MainWindow(QMainWindow):
         self.queue_table.setAlternatingRowColors(True)
         queue_layout.addWidget(self.queue_table)
         queue_group.setLayout(queue_layout)
-        main_tab_layout.addWidget(queue_group)
+        main_tab_layout.addWidget(queue_group, 1)  # stretch=1 — растягивается
 
         self.operations_tabs = QTabWidget()
         self.compression_tab = self.create_compression_tab()
@@ -107,10 +115,10 @@ class MainWindow(QMainWindow):
         self.operations_tabs.addTab(self.normalize_tab, "Починка громкости")
         self.quality_test_tab = self.create_quality_test_tab()
         self.operations_tabs.addTab(self.quality_test_tab, "Тест качества")
-        main_tab_layout.addWidget(self.operations_tabs)
+        main_tab_layout.addWidget(self.operations_tabs, 0)  # stretch=0 — не растягивается
 
         process_group = self.create_process_group()
-        main_tab_layout.addWidget(process_group)
+        main_tab_layout.addWidget(process_group, 0)  # stretch=0 — не растягивается
 
         self.on_format_changed()
         self.setAcceptDrops(True)
@@ -366,11 +374,19 @@ class MainWindow(QMainWindow):
             self.queue_table.setItem(row, 1, QTableWidgetItem(f"{info.get('size_mb', 0):.1f} МБ"))
             self.queue_table.setItem(row, 2, QTableWidgetItem(self.processor.size_estimator.format_duration(info.get("duration", 0))))
             
-            # CRF Колонка (нет = зеленый, цифра = красный)
+            # CRF Колонка (нет = зеленый, цифра = красный/желтый)
             crf_value = info.get('crf_value')
             crf_text = format_crf_display(crf_value)
             crf_item = QTableWidgetItem(crf_text)
-            crf_item.setForeground(Qt.GlobalColor.darkGreen if crf_text == "нет" else Qt.GlobalColor.red)
+            if crf_text == "нет":
+                crf_item.setForeground(Qt.GlobalColor.darkGreen)
+            else:
+                # Если CRF видео меньше текущего установленного — желтый (менее критичный сигнал)
+                current_crf = self.crf_slider.value()
+                if crf_value is not None and crf_value < current_crf:
+                    crf_item.setForeground(QColor(255, 200, 0))  # Желтый
+                else:
+                    crf_item.setForeground(Qt.GlobalColor.red)
             self.queue_table.setItem(row, 3, crf_item)
             
             vfr_item = QTableWidgetItem("Требуется" if info.get("needs_vfr_fix") else "Не требуется")
@@ -461,7 +477,13 @@ class MainWindow(QMainWindow):
             self.batch_test_in_progress = False
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(100 if not self.processing_stopped else 0)
-            self.status_label.setText("Тестирование всех файлов завершено" if not self.processing_stopped else "Отменено")
+            # Подсчёт суммарного времени на все видео в таблице
+            total_est_time = self._calculate_total_est_time()
+            if total_est_time > 0 and not self.processing_stopped:
+                total_time_str = self.processor.size_estimator.format_duration(total_est_time)
+                self.status_label.setText(f"Тестирование всех файлов завершено. Суммарное время сжатия: {total_time_str}")
+            else:
+                self.status_label.setText("Тестирование всех файлов завершено" if not self.processing_stopped else "Отменено")
             self.set_ui_enabled(True)
             return
             
@@ -560,13 +582,73 @@ class MainWindow(QMainWindow):
     def update_queue_label(self):
         self.queue_label.setText(f"В очереди: {len(self.file_queue)} файлов")
 
+    def _calculate_total_est_time(self):
+        """Подсчёт суммарного оценочного времени сжатия для всех видео в таблице."""
+        total_seconds = 0.0
+        all_files = []
+        if self.current_file and self.current_info:
+            all_files.append((self.current_file, self.current_info))
+        all_files.extend(self.file_queue)
+        for _, info in all_files:
+            est_time_str = info.get('test_est_time', '')
+            if est_time_str and est_time_str != '-':
+                # Парсим строку вида "1ч 23м 45с" или "23м 45с" или "45с"
+                seconds = 0
+                for part in est_time_str.split():
+                    if 'ч' in part:
+                        seconds += int(part.replace('ч', '')) * 3600
+                    elif 'м' in part:
+                        seconds += int(part.replace('м', '')) * 60
+                    elif 'с' in part:
+                        seconds += int(part.replace('с', ''))
+                total_seconds += seconds
+        return total_seconds
+
+    def _load_help_content(self):
+        """Загружает info.md и отображает во вкладке Справка."""
+        info_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "info.md")
+        try:
+            with open(info_path, 'r', encoding='utf-8') as f:
+                md_content = f.read()
+            # Простой markdown -> HTML конвертер
+            html_lines = []
+            for line in md_content.split('\n'):
+                if line.startswith('# '):
+                    html_lines.append(f'<h1>{line[2:]}</h1>')
+                elif line.startswith('## '):
+                    html_lines.append(f'<h2>{line[3:]}</h2>')
+                elif line.startswith('# '):
+                    html_lines.append(f'<h1>{line[2:]}</h1>')
+                elif line.strip() == '':
+                    html_lines.append('<br>')
+                else:
+                    html_lines.append(f'<p>{line}</p>')
+            html_content = f"""
+            <html>
+            <head>
+                <style>
+                    body {{ font-family: Arial, sans-serif; padding: 20px; line-height: 1.6; }}
+                    h1 {{ color: #333; border-bottom: 2px solid #ddd; padding-bottom: 5px; }}
+                    h2 {{ color: #555; }}
+                    p {{ margin: 5px 0; }}
+                </style>
+            </head>
+            <body>
+                {''.join(html_lines)}
+            </body>
+            </html>
+            """
+            self.help_view.setHtml(html_content)
+        except Exception as e:
+            self.help_view.setHtml(f"<html><body><p>Не удалось загрузить info.md: {e}</p></body></html>")
+
     def select_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Выберите видеофайлы", "", "Video files (*.mp4 *.avi *.mkv *.mov *.webm)")
         if files:
             for file in files: self.add_file_to_queue(file)
 
     def set_current_file(self, file_path, file_info):
-        self.file_label.setText(f"Текущий файл: {os.path.basename(file_path)}")
+        # Текст "Текущий файл" удалён — и так понятно, что текущий это первый в таблице
         self.process_btn.setEnabled(True)
         self.test_all_btn.setEnabled(True)
         self._cached_info = file_info
@@ -754,6 +836,13 @@ class MainWindow(QMainWindow):
             self.status_label.setText(message)
 
     def on_finished(self, result):
+        # Логируем фактическое время сжатия для каждого видео
+        if self.compression_start_time:
+            elapsed = (datetime.now() - self.compression_start_time).total_seconds()
+            time_str = self.processor.size_estimator.format_duration(elapsed)
+            file_name = os.path.basename(self.current_file) if self.current_file else "неизвестный файл"
+            self.log_slot(f"✅ Сжатие завершено: {file_name} | Фактическое время: {time_str}")
+        
         if self.batch_in_progress: self.completed_files_in_batch += 1
         current_tab_text = self.operations_tabs.tabText(self.operations_tabs.currentIndex())
         if current_tab_text == "Тест качества":

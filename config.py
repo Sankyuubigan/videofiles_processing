@@ -128,7 +128,7 @@ CODECS = {
         "preset_factor": VP9_PRESET_FACTOR
     }
 }
-DEFAULT_CODEC_KEY = "libx265"
+DEFAULT_CODEC_KEY = "libx264"
 
 # Определяем форматы и их совместимые кодеки
 OUTPUT_FORMATS = {
@@ -136,13 +136,13 @@ OUTPUT_FORMATS = {
         "name": "MP4",
         "compatible_codecs": ["libx264", "libx265"],
         "audio_codec": "aac",
-        "default_codec": "libx265"
+        "default_codec": "libx264"
     },
     "mkv": {
         "name": "MKV",
         "compatible_codecs": ["libx264", "libx265"],
         "audio_codec": "aac",
-        "default_codec": "libx265"
+        "default_codec": "libx264"
     },
     "hevc": {
         "name": "HEVC",
