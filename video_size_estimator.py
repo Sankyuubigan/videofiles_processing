@@ -27,9 +27,13 @@ class VideoSizeEstimator:
                 import subprocess
                 
                 # Получаем информацию о процессоре через wmic
+                si = subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                si.wShowWindow = subprocess.SW_HIDE
                 result = subprocess.run(
                     ['wmic', 'cpu', 'get', 'name,NumberOfCores,MaxClockSpeed', '/format:list'],
-                    capture_output=True, text=True, timeout=5
+                    capture_output=True, text=True, timeout=5,
+                    startupinfo=si
                 )
                 
                 if result.returncode == 0:

@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 import os
 import logging
 from settings_manager import load_settings, save_settings
-from yt_dlp_manager import is_yt_dlp_installed, install_or_update_yt_dlp, add_yt_dlp_to_path, get_yt_dlp_path
+from yt_dlp_manager import is_yt_dlp_installed, install_or_update_yt_dlp, get_yt_dlp_path
 from youtube_worker import YoutubeDownloadWorker
 
 class DownloadTab(QWidget):
@@ -146,7 +146,6 @@ class DownloadTab(QWidget):
             return
             
         self.save_current_settings()
-        add_yt_dlp_to_path()
         
         if not is_yt_dlp_installed():
             if QMessageBox.question(self, "yt-dlp не установлен", "Установить yt-dlp сейчас?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:

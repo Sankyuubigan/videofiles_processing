@@ -9,8 +9,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QRadioButton, QButtonGroup,
                                QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
                                QTabWidget, QToolButton, QSpinBox)
-from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor
 from config import (OUTPUT_FORMATS, CODECS, DEFAULT_OUTPUT_FORMAT_KEY, 
                     DEFAULT_CODEC_KEY, DEFAULT_USE_HARDWARE_ENCODING, EXTRACTED_FRAME_SUFFIX)
@@ -60,10 +59,12 @@ class MainWindow(QMainWindow):
 
         self.tab_widget = QTabWidget()
         main_layout.addWidget(self.tab_widget)
+        logging.debug("[UI] Создание вкладок интерфейса...")
         
         self.main_tab = QWidget()
         self.tab_widget.addTab(self.main_tab, "Редактор")
         main_tab_layout = QVBoxLayout(self.main_tab)
+        logging.debug("[UI] Вкладка 'Редактор' создана")
         
         self.log_tab = QWidget()
         self.tab_widget.addTab(self.log_tab, "Логи")
@@ -71,18 +72,23 @@ class MainWindow(QMainWindow):
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         log_tab_layout.addWidget(self.log_text)
+        logging.debug("[UI] Вкладка 'Логи' создана")
 
         self.settings_tab = SettingsTab()
         self.tab_widget.addTab(self.settings_tab, "Настройки")
+        logging.debug("[UI] Вкладка 'Настройки' создана")
 
         self.download_tab = DownloadTab()
         self.tab_widget.addTab(self.download_tab, "Скачать видео")
+        logging.debug("[UI] Вкладка 'Скачать видео' создана")
 
         self.help_tab = QWidget()
         self.tab_widget.addTab(self.help_tab, "Справка")
         help_layout = QVBoxLayout(self.help_tab)
-        self.help_view = QWebEngineView()
-        help_layout.addWidget(self.help_view)
+        self.help_text = QTextEdit()
+        self.help_text.setReadOnly(True)
+        help_layout.addWidget(self.help_text)
+        logging.debug("[UI] Вкладка 'Справка' создана, загрузка контента...")
         self._load_help_content()
 
         file_group = self.create_file_group()
@@ -351,17 +357,25 @@ class MainWindow(QMainWindow):
             self.output_dir_label.setStyleSheet("color: gray; font-size: 10px;")
 
     def add_file_to_queue(self, file_path):
+        logging.debug(f"[Queue] Попытка добавить файл: {file_path}")
         if os.path.isfile(file_path):
+            logging.info(f"[Queue] Анализ видеофайла: {os.path.basename(file_path)}")
             info = self.processor.get_video_info(file_path)
             if "error" not in info:
                 info["is_video"] = info.get("width", 0) > 0 and info.get("height", 0) > 0
                 self.file_queue.append((file_path, info))
+                logging.debug(f"[Queue] Файл добавлен в очередь (всего: {len(self.file_queue)})")
                 self.update_queue_table()
                 self.update_queue_label()
                 if len(self.file_queue) == 1 and self.current_file is None:
                     self.current_file, self.current_info = self.file_queue.pop(0)
+                    logging.info(f"[Queue] Файл установлен как текущий: {os.path.basename(self.current_file)}")
                     self.set_current_file(self.current_file, self.current_info)
                     self.set_ui_enabled(True)
+            else:
+                logging.error(f"[Queue] Ошибка получения информации о файле: {info.get('error')}")
+        else:
+            logging.warning(f"[Queue] Файл не существует: {file_path}")
 
     def update_queue_table(self):
         all_files =[]
@@ -606,10 +620,35 @@ class MainWindow(QMainWindow):
 
     def _load_help_content(self):
         """Загружает info.md и отображает во вкладке Справка."""
-        info_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "info.md")
+        # При работе из PyInstaller sys._MEIPASS указывает на временную папку с распакованными данными
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        info_path = os.path.join(base_path, "info.md")
+        logging.debug(f"[HelpTab] Поиск файла справки: {info_path}")
         try:
+            if not os.path.exists(info_path):
+                # Диагностика: покажем пользователю, что мы видим
+                frozen_info = f"sys.frozen={getattr(sys, 'frozen', False)}, sys._MEIPASS={getattr(sys, '_MEIPASS', 'N/A')}"
+                try:
+                    contents = os.listdir(base_path)
+                    dir_info = f"Содержимое {base_path}: {', '.join(contents[:20])}..."
+                except Exception as e:
+                    dir_info = f"Не удалось прочитать {base_path}: {e}"
+                error_html = f"""<html><body>
+                    <p><b>Файл справки info.md не найден.</b></p>
+                    <p>Искали: <code>{info_path}</code></p>
+                    <p>Режим: frozen={getattr(sys, 'frozen', False)}, _MEIPASS={getattr(sys, '_MEIPASS', 'N/A')}</p>
+                    <p>{dir_info}</p>
+                </body></html>"""
+                logging.error(f"[HelpTab] {error_html}")
+                self.help_text.setHtml(error_html)
+                return
+            logging.info(f"[HelpTab] Загрузка info.md ({os.path.getsize(info_path)} байт)...")
             with open(info_path, 'r', encoding='utf-8') as f:
                 md_content = f.read()
+            logging.debug(f"[HelpTab] Прочитано {len(md_content)} символов, начало конвертации MD→HTML")
             # Простой markdown -> HTML конвертер
             html_lines = []
             for line in md_content.split('\n'):
@@ -638,9 +677,17 @@ class MainWindow(QMainWindow):
             </body>
             </html>
             """
-            self.help_view.setHtml(html_content)
+            self.help_text.setHtml(html_content)
+            logging.info(f"[HelpTab] Справка успешно загружена и отображена ({len(html_lines)} строк HTML)")
+        except UnicodeDecodeError as e:
+            logging.error(f"[HelpTab] Ошибка кодировки при чтении info.md: {e}")
+            self.help_text.setHtml(f"<html><body><p>Ошибка кодировки файла справки: {e}</p></body></html>")
+        except PermissionError as e:
+            logging.error(f"[HelpTab] Нет доступа к info.md: {e}")
+            self.help_text.setHtml(f"<html><body><p>Нет доступа к файлу справки: {e}</p></body></html>")
         except Exception as e:
-            self.help_view.setHtml(f"<html><body><p>Не удалось загрузить info.md: {e}</p></body></html>")
+            logging.error(f"[HelpTab] Критическая ошибка при загрузке info.md: {e}", exc_info=True)
+            self.help_text.setHtml(f"<html><body><p>Не удалось загрузить info.md: {e}</p></body></html>")
 
     def select_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Выберите видеофайлы", "", "Video files (*.mp4 *.avi *.mkv *.mov *.webm)")
@@ -769,12 +816,14 @@ class MainWindow(QMainWindow):
             self.batch_in_progress = True
             self.total_files_in_batch = len(self.file_queue) + (1 if self.current_file else 0)
             self.completed_files_in_batch = 0
+            logging.info(f"[Process] Начата пакетная обработка: {self.total_files_in_batch} файлов")
         self.processing_stopped = False
         self.compression_start_time = datetime.now()
         
         current_tab_text = self.operations_tabs.tabText(self.operations_tabs.currentIndex())
         params = {"input_path": self.current_file, "output_dir": self.output_directory}
         worker_mode = ""
+        logging.debug(f"[Process] Режим обработки: '{current_tab_text}', файл: {os.path.basename(self.current_file)}")
 
         if current_tab_text == "Сжатие видео":
             worker_mode = "compress"
@@ -911,16 +960,37 @@ class MainWindow(QMainWindow):
         else: event.accept()
 
 def main():
+    logging.info("[Main] Запуск приложения VideoCompressor")
+    logging.debug(f"[Main] Python: {sys.version}, платформа: {sys.platform}")
+    logging.debug(f"[Main] Рабочая директория: {os.getcwd()}")
+    logging.debug(f"[Main] Путь скрипта: {os.path.abspath(__file__)}")
+    
     app = QApplication(sys.argv)
+    logging.debug("[Main] QApplication инициализирован")
+    
     processor = VideoProcessor()
     logging.info("--- Инфо ---")
-    logging.info(processor.get_gpu_info())
+    gpu_info = processor.get_gpu_info()
+    logging.info(gpu_info)
+    logging.debug(f"[Main] Информация о GPU получена")
     
-    if not os.path.exists(get_actual_ffmpeg_path()) or not os.path.exists(get_ffprobe_path()):
-        if not FFmpegDownloader().check_and_download(): return -1
+    ffmpeg_path = get_actual_ffmpeg_path()
+    ffprobe_path = get_ffprobe_path()
+    logging.debug(f"[Main] Ожидается ffmpeg: {ffmpeg_path}")
+    logging.debug(f"[Main] Ожидается ffprobe: {ffprobe_path}")
     
+    if not os.path.exists(ffmpeg_path) or not os.path.exists(ffprobe_path):
+        logging.warning(f"[Main] FFmpeg/FFprobe не найдены, запуск загрузки...")
+        downloader = FFmpegDownloader()
+        if not downloader.check_and_download():
+            logging.error("[Main] Не удалось загрузить FFmpeg, выход")
+            return -1
+        logging.info("[Main] FFmpeg успешно загружен")
+    
+    logging.info("[Main] Создание главного окна...")
     window = MainWindow()
     window.show()
+    logging.info("[Main] Главное окно отображено, запуск event loop")
     sys.exit(app.exec())
 
 if __name__ == "__main__":

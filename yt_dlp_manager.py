@@ -1,42 +1,50 @@
 import os
 import sys
+import platform
 import subprocess
-import shutil
 import logging
-import importlib.util
 from settings_manager import get_yt_dlp_path
 
 logger = logging.getLogger(__name__)
+
+def _no_window_startupinfo():
+    if platform.system() == "Windows":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = subprocess.SW_HIDE
+        return si
+    return None
+
+_MIN_STANDALONE_SIZE = 1_000_000
 
 def get_yt_dlp_dir():
     return get_yt_dlp_path()
 
 def get_yt_dlp_bin_dir():
-    yt_path = get_yt_dlp_dir()
-    return os.path.join(yt_path, "bin")
+    return os.path.join(get_yt_dlp_dir(), "bin")
+
+def get_yt_dlp_exe_path():
+    exe_name = "yt-dlp.exe" if os.name == "nt" else "yt-dlp"
+    return os.path.join(get_yt_dlp_bin_dir(), exe_name)
 
 def is_yt_dlp_installed():
-    yt_path = get_yt_dlp_dir()
-    bin_path = get_yt_dlp_bin_dir()
-    yt_dlp_exe = os.path.join(bin_path, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
-    exists = os.path.exists(yt_dlp_exe)
-    logger.info(f"Проверка yt-dlp: путь={yt_dlp_exe}, существует={exists}")
-    return exists
+    exe = get_yt_dlp_exe_path()
+    if not os.path.exists(exe):
+        return False
+    size = os.path.getsize(exe)
+    ok = size > _MIN_STANDALONE_SIZE
+    logger.info(f"Проверка yt-dlp: путь={exe}, размер={size}, standalone={ok}")
+    return ok
 
 def get_installed_version():
-    yt_path = get_yt_dlp_dir()
-    bin_path = get_yt_dlp_bin_dir()
-    yt_dlp_exe = os.path.join(bin_path, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
-    
-    if not os.path.exists(yt_dlp_exe):
+    exe = get_yt_dlp_exe_path()
+    if not os.path.exists(exe):
         return None
-    
     try:
         result = subprocess.run(
-            [yt_dlp_exe, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=30
+            [exe, "--version"],
+            capture_output=True, text=True, timeout=30,
+            startupinfo=_no_window_startupinfo()
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -44,87 +52,102 @@ def get_installed_version():
         pass
     return None
 
-def get_python_executable():
-    if getattr(sys, 'frozen', False):
-        python_exe = shutil.which('python')
-        if python_exe:
-            return python_exe
-        if os.name == 'nt':
-            python_exe = os.path.join(sys.prefix, 'python.exe')
-            if os.path.exists(python_exe):
-                return python_exe
-        return sys.executable
-    return sys.executable
+def _get_download_url():
+    if os.name == "nt":
+        return "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+    import platform
+    system = platform.system().lower()
+    arch = platform.machine().lower()
+    if system == "darwin":
+        return f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+    if arch in ("x86_64", "amd64"):
+        return "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
+    return f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_{arch}"
 
 def install_or_update_yt_dlp(callback=None):
-    yt_path = get_yt_dlp_dir()
-    os.makedirs(yt_path, exist_ok=True)
-    
+    import requests as _requests
+
+    bin_dir = get_yt_dlp_bin_dir()
+    os.makedirs(bin_dir, exist_ok=True)
+    exe = get_yt_dlp_exe_path()
+    url = _get_download_url()
+
     if callback:
-        callback("Создание папки для yt-dlp...")
-    
-    pip_path = get_python_executable()
-    logger.info(f"Используем Python: {pip_path}")
-    
-    cmd = [
-        pip_path, "-m", "pip", "install",
-        "--upgrade",
-        "--target", yt_path,
-        "--pre", "yt-dlp[default]"
-    ]
-    
-    if callback:
-        callback(f"Установка yt-dlp в {yt_path}...")
-        callback(f"Команда: {' '.join(cmd)}")
-    
+        callback(f"Скачивание yt-dlp с GitHub...")
+        callback(f"URL: {url}")
+
+    temp_file = exe + ".part"
+    max_retries = 3
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600
-        )
-        
-        if result.returncode != 0:
-            error_msg = result.stderr or "Неизвестная ошибка"
+        for attempt in range(1, max_retries + 1):
+            try:
+                if callback and max_retries > 1:
+                    callback(f"Скачивание yt-dlp... (попытка {attempt}/{max_retries})")
+
+                r = _requests.get(url, stream=True, timeout=60, allow_redirects=True)
+                r.raise_for_status()
+
+                total = int(r.headers.get("content-length", 0))
+                downloaded = 0
+                with open(temp_file, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 256):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if callback and total > 0:
+                                pct = min(100, int(downloaded * 100 / total))
+                                callback(f"Скачивание yt-dlp... {pct}%")
+
+                break
+            except (_requests.ConnectionError, _requests.Timeout, _requests.HTTPError) as e:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                if attempt < max_retries:
+                    if callback:
+                        callback(f"Попытка {attempt} не удалась: {e}. Повтор...")
+                    logger.warning(f"Попытка {attempt}/{max_retries} не удалась: {e}")
+                    import time
+                    time.sleep(2 * attempt)
+                    continue
+                raise
+
+        if os.name != "nt":
+            os.chmod(temp_file, 0o755)
+
+        if os.path.exists(exe):
+            os.remove(exe)
+        os.rename(temp_file, exe)
+
+        size = os.path.getsize(exe)
+        if size < _MIN_STANDALONE_SIZE:
+            msg = f"Скачанный файл слишком маленький ({size} байт). Возможно, неверная ссылка."
             if callback:
-                callback(f"Ошибка: {error_msg}")
-            return False, error_msg
-        
+                callback(f"Ошибка: {msg}")
+            if os.path.exists(exe):
+                os.remove(exe)
+            return False, msg
+
+        ver = get_installed_version()
         if callback:
-            callback(" yt-dlp успешно установлен!")
-        
+            callback(f"yt-dlp установлен! Версия: {ver or 'неизвестна'}")
         return True, "Успешно"
-        
-    except subprocess.TimeoutExpired:
-        if callback:
-            callback("Ошибка: Превышен таймаут установки")
-        return False, "Таймаут"
+
     except Exception as e:
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+        msg = f"Ошибка скачивания: {e}"
         if callback:
-            callback(f"Ошибка: {str(e)}")
-        return False, str(e)
+            callback(f"Ошибка: {msg}")
+        logger.error(f"Ошибка установки yt-dlp: {e}", exc_info=True)
+        return False, msg
 
 def ensure_yt_dlp_installed(callback=None):
     if not is_yt_dlp_installed():
         if callback:
             callback("yt-dlp не найден. Начинаем установку...")
-        success, msg = install_or_update_yt_dlp(callback)
+        success, _ = install_or_update_yt_dlp(callback)
         return success
     return True
-
-def add_yt_dlp_to_path():
-    yt_path = get_yt_dlp_dir()
-    if yt_path not in sys.path:
-        sys.path.insert(0, yt_path)
-    bin_path = get_yt_dlp_bin_dir()
-    if bin_path not in sys.path:
-        sys.path.insert(0, bin_path)
-
-def get_yt_dlp_exe_path():
-    yt_path = get_yt_dlp_dir()
-    bin_path = get_yt_dlp_bin_dir()
-    return os.path.join(bin_path, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
 
 def get_deno_path():
     if os.name == "nt":
@@ -140,7 +163,8 @@ def is_deno_installed():
                 [deno_path, "--version"],
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=10,
+                startupinfo=_no_window_startupinfo()
             )
             if result.returncode == 0:
                 logger.info(f"Deno found: {result.stdout.strip()}")
@@ -199,7 +223,8 @@ def install_deno(callback=None):
             [deno_path, "--version"],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            startupinfo=_no_window_startupinfo()
         )
         
         if callback:
