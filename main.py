@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QPushButton, QLabel, QFileDialog,
                                QProgressBar, QTextEdit, QGroupBox,
                                QMessageBox, QComboBox, QCheckBox, QSlider,
-                               QRadioButton, QButtonGroup,
+                               QRadioButton, QButtonGroup, QDoubleSpinBox,
                                QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
                                QTabWidget, QToolButton, QSpinBox)
 from PySide6.QtCore import Qt, QTimer
@@ -92,7 +92,7 @@ class MainWindow(QMainWindow):
         self._load_help_content()
 
         file_group = self.create_file_group()
-        main_tab_layout.addWidget(file_group, 0)  # stretch=0 — не растягивается
+        main_tab_layout.addWidget(file_group, 0)
 
         queue_group = QGroupBox("Очередь файлов")
         queue_layout = QVBoxLayout()
@@ -110,7 +110,7 @@ class MainWindow(QMainWindow):
         self.queue_table.setAlternatingRowColors(True)
         queue_layout.addWidget(self.queue_table)
         queue_group.setLayout(queue_layout)
-        main_tab_layout.addWidget(queue_group, 1)  # stretch=1 — растягивается
+        main_tab_layout.addWidget(queue_group, 1)
 
         self.operations_tabs = QTabWidget()
         self.compression_tab = self.create_compression_tab()
@@ -121,10 +121,10 @@ class MainWindow(QMainWindow):
         self.operations_tabs.addTab(self.normalize_tab, "Починка громкости")
         self.quality_test_tab = self.create_quality_test_tab()
         self.operations_tabs.addTab(self.quality_test_tab, "Тест качества")
-        main_tab_layout.addWidget(self.operations_tabs, 0)  # stretch=0 — не растягивается
+        main_tab_layout.addWidget(self.operations_tabs, 0)
 
         process_group = self.create_process_group()
-        main_tab_layout.addWidget(process_group, 0)  # stretch=0 — не растягивается
+        main_tab_layout.addWidget(process_group, 0)
 
         self.on_format_changed()
         self.setAcceptDrops(True)
@@ -205,8 +205,21 @@ class MainWindow(QMainWindow):
         self.crf_label = QLabel("CRF: ")
         self.crf_slider = QSlider(Qt.Orientation.Horizontal)
         self.crf_slider.valueChanged.connect(self.on_crf_changed)
+        
+        self.auto_crf_checkbox = QCheckBox("Авто CRF (Цель VMAF):")
+        self.target_vmaf_spin = QDoubleSpinBox()
+        self.target_vmaf_spin.setRange(80.0, 99.0)
+        self.target_vmaf_spin.setValue(95.0)
+        self.target_vmaf_spin.setSingleStep(0.5)
+        self.target_vmaf_spin.setEnabled(False)
+        self.target_vmaf_spin.setToolTip("95.0 = Визуально неотличимо от оригинала. Меньше = сильнее сожмет.")
+        
+        self.auto_crf_checkbox.toggled.connect(self.on_auto_crf_toggled)
+        
         crf_layout.addWidget(self.crf_label)
         crf_layout.addWidget(self.crf_slider)
+        crf_layout.addWidget(self.auto_crf_checkbox)
+        crf_layout.addWidget(self.target_vmaf_spin)
         
         vfr_layout = QHBoxLayout()
         self.vfr_checkbox = QCheckBox("Принудительная починка VFR")
@@ -222,6 +235,11 @@ class MainWindow(QMainWindow):
         settings_layout.addLayout(crf_layout)
         settings_layout.addLayout(vfr_layout)
         return tab
+
+    def on_auto_crf_toggled(self, checked):
+        self.crf_slider.setEnabled(not checked)
+        self.crf_label.setEnabled(not checked)
+        self.target_vmaf_spin.setEnabled(checked)
 
     def create_trim_tab(self):
         tab = QWidget()
@@ -395,7 +413,6 @@ class MainWindow(QMainWindow):
             if crf_text == "нет":
                 crf_item.setForeground(Qt.GlobalColor.darkGreen)
             else:
-                # Если CRF видео меньше текущего установленного — желтый (менее критичный сигнал)
                 current_crf = self.crf_slider.value()
                 if crf_value is not None and crf_value < current_crf:
                     crf_item.setForeground(QColor(255, 200, 0))  # Желтый
@@ -491,7 +508,6 @@ class MainWindow(QMainWindow):
             self.batch_test_in_progress = False
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(100 if not self.processing_stopped else 0)
-            # Подсчёт суммарного времени на все видео в таблице
             total_est_time = self._calculate_total_est_time()
             if total_est_time > 0 and not self.processing_stopped:
                 total_time_str = self.processor.size_estimator.format_duration(total_est_time)
@@ -508,7 +524,7 @@ class MainWindow(QMainWindow):
         button = self.sender()
         if button and button.property("file_path"):
             file_path = button.property("file_path")
-            self.batch_test_in_progress = False # Сброс, так как это одиночный запуск
+            self.batch_test_in_progress = False
             self.start_chunk_test(file_path)
 
     def start_chunk_test(self, file_path):
@@ -521,7 +537,10 @@ class MainWindow(QMainWindow):
             "codec": self.codec_combo.currentData(),
             "crf_value": self.crf_slider.value(),
             "preset_value": self.preset_combo.currentData(),
-            "use_hardware": self.hardware_radio.isChecked()
+            "use_hardware": self.hardware_radio.isChecked(),
+            "auto_crf": self.auto_crf_checkbox.isChecked(),
+            "target_vmaf": self.target_vmaf_spin.value(),
+            "force_vfr_fix": self.vfr_checkbox.isChecked()
         }
 
         self.compression_worker = WorkerThread(self.processor, "chunk_test", **params)
@@ -557,7 +576,7 @@ class MainWindow(QMainWindow):
         
         if self.batch_test_in_progress:
             self.log_slot(f"Ошибка теста: {error}")
-            self.process_next_test() # Пропускаем файл с ошибкой и идем дальше
+            self.process_next_test()
         else:
             self.status_label.setText("Ошибка при тестировании!")
             QMessageBox.critical(self, "Ошибка теста", f"Не удалось выполнить тест:\n{error}")
@@ -597,7 +616,6 @@ class MainWindow(QMainWindow):
         self.queue_label.setText(f"В очереди: {len(self.file_queue)} файлов")
 
     def _calculate_total_est_time(self):
-        """Подсчёт суммарного оценочного времени сжатия для всех видео в таблице."""
         total_seconds = 0.0
         all_files = []
         if self.current_file and self.current_info:
@@ -606,7 +624,6 @@ class MainWindow(QMainWindow):
         for _, info in all_files:
             est_time_str = info.get('test_est_time', '')
             if est_time_str and est_time_str != '-':
-                # Парсим строку вида "1ч 23м 45с" или "23м 45с" или "45с"
                 seconds = 0
                 for part in est_time_str.split():
                     if 'ч' in part:
@@ -619,8 +636,6 @@ class MainWindow(QMainWindow):
         return total_seconds
 
     def _load_help_content(self):
-        """Загружает info.md и отображает во вкладке Справка."""
-        # При работе из PyInstaller sys._MEIPASS указывает на временную папку с распакованными данными
         if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
             base_path = sys._MEIPASS
         else:
@@ -629,35 +644,17 @@ class MainWindow(QMainWindow):
         logging.debug(f"[HelpTab] Поиск файла справки: {info_path}")
         try:
             if not os.path.exists(info_path):
-                # Диагностика: покажем пользователю, что мы видим
-                frozen_info = f"sys.frozen={getattr(sys, 'frozen', False)}, sys._MEIPASS={getattr(sys, '_MEIPASS', 'N/A')}"
-                try:
-                    contents = os.listdir(base_path)
-                    dir_info = f"Содержимое {base_path}: {', '.join(contents[:20])}..."
-                except Exception as e:
-                    dir_info = f"Не удалось прочитать {base_path}: {e}"
-                error_html = f"""<html><body>
-                    <p><b>Файл справки info.md не найден.</b></p>
-                    <p>Искали: <code>{info_path}</code></p>
-                    <p>Режим: frozen={getattr(sys, 'frozen', False)}, _MEIPASS={getattr(sys, '_MEIPASS', 'N/A')}</p>
-                    <p>{dir_info}</p>
-                </body></html>"""
-                logging.error(f"[HelpTab] {error_html}")
+                error_html = f"<html><body><p><b>Файл справки info.md не найден.</b></p></body></html>"
                 self.help_text.setHtml(error_html)
                 return
-            logging.info(f"[HelpTab] Загрузка info.md ({os.path.getsize(info_path)} байт)...")
             with open(info_path, 'r', encoding='utf-8') as f:
                 md_content = f.read()
-            logging.debug(f"[HelpTab] Прочитано {len(md_content)} символов, начало конвертации MD→HTML")
-            # Простой markdown -> HTML конвертер
             html_lines = []
             for line in md_content.split('\n'):
                 if line.startswith('# '):
                     html_lines.append(f'<h1>{line[2:]}</h1>')
                 elif line.startswith('## '):
                     html_lines.append(f'<h2>{line[3:]}</h2>')
-                elif line.startswith('# '):
-                    html_lines.append(f'<h1>{line[2:]}</h1>')
                 elif line.strip() == '':
                     html_lines.append('<br>')
                 else:
@@ -678,15 +675,7 @@ class MainWindow(QMainWindow):
             </html>
             """
             self.help_text.setHtml(html_content)
-            logging.info(f"[HelpTab] Справка успешно загружена и отображена ({len(html_lines)} строк HTML)")
-        except UnicodeDecodeError as e:
-            logging.error(f"[HelpTab] Ошибка кодировки при чтении info.md: {e}")
-            self.help_text.setHtml(f"<html><body><p>Ошибка кодировки файла справки: {e}</p></body></html>")
-        except PermissionError as e:
-            logging.error(f"[HelpTab] Нет доступа к info.md: {e}")
-            self.help_text.setHtml(f"<html><body><p>Нет доступа к файлу справки: {e}</p></body></html>")
         except Exception as e:
-            logging.error(f"[HelpTab] Критическая ошибка при загрузке info.md: {e}", exc_info=True)
             self.help_text.setHtml(f"<html><body><p>Не удалось загрузить info.md: {e}</p></body></html>")
 
     def select_files(self):
@@ -695,7 +684,6 @@ class MainWindow(QMainWindow):
             for file in files: self.add_file_to_queue(file)
 
     def set_current_file(self, file_path, file_info):
-        # Текст "Текущий файл" удалён — и так понятно, что текущий это первый в таблице
         self.process_btn.setEnabled(True)
         self.test_all_btn.setEnabled(True)
         self._cached_info = file_info
@@ -772,44 +760,6 @@ class MainWindow(QMainWindow):
     def on_quality_test_frame_changed(self, value):
         self.quality_test_frame_number = value
 
-    def extract_frame_action(self):
-        if not self.current_file:
-            QMessageBox.warning(self, "Ошибка", "Не выбран видеофайл.")
-            return
-        
-        frame_number = self.frame_number_spin.value()
-        video_name = os.path.splitext(os.path.basename(self.current_file))[0]
-        codec = self._cached_info.get('video_codec', 'unknown')
-        crf_val = self._cached_info.get('crf_value')
-        crf_str = f"crf{int(crf_val)}" if crf_val is not None else "crfunknown"
-        frame_filename = f"{video_name}{EXTRACTED_FRAME_SUFFIX}_{codec}_{crf_str}_frame{frame_number:06d}.jpg"
-        output_path = os.path.join(os.path.dirname(self.current_file), frame_filename)
-        
-        self.extract_frame_status.setText("Извлечение кадра...")
-        self.extract_frame_status.setStyleSheet("color: orange;")
-        
-        self.compression_worker = WorkerThread(
-            self.processor, "extract_frame",
-            input_path=self.current_file,
-            frame_number=frame_number,
-            output_path=output_path
-        )
-        self.compression_worker.progress_updated.connect(self.update_progress)
-        self.compression_worker.finished.connect(self.on_extract_frame_finished)
-        self.compression_worker.error_occurred.connect(self.on_extract_frame_error)
-        self.active_workers.append(self.compression_worker)
-        self.compression_worker.start()
-
-    def on_extract_frame_finished(self, result):
-        self.extract_frame_status.setText(f"Кадр сохранён: {os.path.basename(result)}")
-        self.extract_frame_status.setStyleSheet("color: green;")
-        QMessageBox.information(self, "Готово", f"Кадр успешно сохранён:\n{result}")
-
-    def on_extract_frame_error(self, error):
-        self.extract_frame_status.setText("Ошибка при извлечении кадра!")
-        self.extract_frame_status.setStyleSheet("color: red;")
-        QMessageBox.critical(self, "Ошибка", f"Не удалось извлечь кадр:\n{error}")
-
     def start_processing(self):
         if not self.current_file: return
         if not self.batch_in_progress:
@@ -831,6 +781,8 @@ class MainWindow(QMainWindow):
                 "output_format": self.format_combo.currentData(), "codec": self.codec_combo.currentData(),
                 "crf_value": self.crf_slider.value(), "preset_value": self.preset_combo.currentData(),
                 "force_vfr_fix": self.vfr_checkbox.isChecked(), "use_hardware": self.hardware_radio.isChecked(),
+                "auto_crf": self.auto_crf_checkbox.isChecked(),
+                "target_vmaf": self.target_vmaf_spin.value()
             })
         elif current_tab_text == "Сокращение":
             worker_mode = "trim"
@@ -885,7 +837,6 @@ class MainWindow(QMainWindow):
             self.status_label.setText(message)
 
     def on_finished(self, result):
-        # Логируем фактическое время сжатия для каждого видео
         if self.compression_start_time:
             elapsed = (datetime.now() - self.compression_start_time).total_seconds()
             time_str = self.processor.size_estimator.format_duration(elapsed)
@@ -939,7 +890,11 @@ class MainWindow(QMainWindow):
         self.operations_tabs.setEnabled(enabled)
         self.output_dir_btn.setEnabled(enabled)
         
-        # Блокируем кнопки теста во время обработки
+        if hasattr(self, 'auto_crf_checkbox'):
+            if enabled and self.auto_crf_checkbox.isChecked():
+                self.crf_slider.setEnabled(False)
+                self.crf_label.setEnabled(False)
+        
         for i in range(self.queue_table.rowCount()):
             widget = self.queue_table.cellWidget(i, 8)
             if widget:
@@ -960,37 +915,18 @@ class MainWindow(QMainWindow):
         else: event.accept()
 
 def main():
-    logging.info("[Main] Запуск приложения VideoCompressor")
-    logging.debug(f"[Main] Python: {sys.version}, платформа: {sys.platform}")
-    logging.debug(f"[Main] Рабочая директория: {os.getcwd()}")
-    logging.debug(f"[Main] Путь скрипта: {os.path.abspath(__file__)}")
-    
     app = QApplication(sys.argv)
-    logging.debug("[Main] QApplication инициализирован")
-    
     processor = VideoProcessor()
-    logging.info("--- Инфо ---")
-    gpu_info = processor.get_gpu_info()
-    logging.info(gpu_info)
-    logging.debug(f"[Main] Информация о GPU получена")
-    
     ffmpeg_path = get_actual_ffmpeg_path()
     ffprobe_path = get_ffprobe_path()
-    logging.debug(f"[Main] Ожидается ffmpeg: {ffmpeg_path}")
-    logging.debug(f"[Main] Ожидается ffprobe: {ffprobe_path}")
     
     if not os.path.exists(ffmpeg_path) or not os.path.exists(ffprobe_path):
-        logging.warning(f"[Main] FFmpeg/FFprobe не найдены, запуск загрузки...")
         downloader = FFmpegDownloader()
         if not downloader.check_and_download():
-            logging.error("[Main] Не удалось загрузить FFmpeg, выход")
             return -1
-        logging.info("[Main] FFmpeg успешно загружен")
-    
-    logging.info("[Main] Создание главного окна...")
+            
     window = MainWindow()
     window.show()
-    logging.info("[Main] Главное окно отображено, запуск event loop")
     sys.exit(app.exec())
 
 if __name__ == "__main__":

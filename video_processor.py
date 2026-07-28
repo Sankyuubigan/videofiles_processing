@@ -7,7 +7,7 @@ import tempfile
 import os
 from pathlib import Path
 from typing import Optional, Callable
-from config import COMPRESSED_VIDEO_SUFFIX, TRIMMED_VIDEO_SUFFIX
+from config import COMPRESSED_VIDEO_SUFFIX, TRIMMED_VIDEO_SUFFIX, CODECS
 from video_size_estimator import VideoSizeEstimator
 from ffmpeg_handler import FFmpegHandler
 from crf_extractor import get_crf_from_file
@@ -22,21 +22,17 @@ class VideoProcessor:
         self.size_estimator = VideoSizeEstimator()
     
     def get_gpu_info(self) -> str:
-        """Получает информацию о доступных GPU"""
         return self.ffmpeg_handler.get_gpu_info()
     
     def get_audio_tracks(self, input_path: str) -> list:
-        """Получает информацию об аудиодорожках"""
         return self.ffmpeg_handler.get_audio_tracks(input_path)
     
     def estimate_video_complexity(self, video_info: dict) -> tuple[int, str]:
-        """Оценивает сложность видео"""
         return self.size_estimator.estimate_video_complexity(video_info)
     
     def estimated_size_mb(self, video_bitrate: int, audio_bitrate: int, duration: float, crf: int, codec: str, 
                          needs_vfr_fix: bool = False, use_hardware: bool = False, preset: str = "medium", 
                          complexity_score: int = 5, width: int = 1920, height: int = 1080) -> float:
-        """Оценивает размер файла после сжатия"""
         return self.size_estimator.estimate_size_mb(
             video_bitrate=video_bitrate,
             audio_bitrate=audio_bitrate,
@@ -52,7 +48,6 @@ class VideoProcessor:
         )
     
     def get_video_info(self, input_path: str) -> dict:
-        """Получает полную информацию о видео файле"""
         video_info = self.ffmpeg_handler.get_video_info(input_path)
         
         if "error" in video_info:
@@ -60,7 +55,6 @@ class VideoProcessor:
         
         gpu_info = self.get_gpu_info()
         complexity_score, complexity_desc = self.estimate_video_complexity(video_info)
-        
         crf_value = get_crf_from_file(input_path)
         
         video_info.update({
@@ -73,23 +67,130 @@ class VideoProcessor:
         
         return video_info
     
+    def find_best_crf(self, input_path: str, codec: str, preset_value: str, use_hardware: bool, target_vmaf: float, process_setter: Optional[Callable] = None, progress_callback: Optional[Callable] = None, force_vfr_fix: bool = False) -> int:
+        """Бинарный поиск идеального CRF по целевому VMAF (полное совпадение с ручным тестом)."""
+        video_info = self.get_video_info(input_path)
+        width = video_info.get("width", 1920)
+        duration = video_info.get("duration", 0)
+        
+        codec_info = CODECS.get(codec, CODECS["libx264"])
+        crf_low = codec_info["crf_min"]
+        crf_high = codec_info["crf_max"]
+        
+        settings = load_settings()
+        vmaf_subsample = settings.get("vmaf_subsample", 5)
+        # Теперь Авто-CRF берет настройки прямо из ваших параметров, чтобы оценки на 100% совпадали с ручным тестом
+        chunk_count = settings.get("chunk_count", 3)
+        chunk_duration = settings.get("chunk_duration", 10)
+        
+        if duration < 30:
+            chunk_count = 1
+            chunk_duration = min(chunk_duration, duration * 0.5)
+            timestamps = [duration * 0.5]
+        else:
+            if chunk_count == 1: timestamps = [duration * 0.5]
+            elif chunk_count == 2: timestamps = [duration * 0.2, duration * 0.8]
+            elif chunk_count == 3: timestamps = [duration * 0.1, duration * 0.5, duration * 0.8]
+            elif chunk_count == 4: timestamps = [duration * 0.1, duration * 0.35, duration * 0.6, duration * 0.85]
+            else: timestamps = [duration * 0.1, duration * 0.3, duration * 0.5, duration * 0.7, duration * 0.9]
+        
+        best_crf_closest = codec_info["crf_default"]
+        min_diff = 100.0
+        best_crf_acceptable = -1
+        
+        temp_dir = tempfile.gettempdir()
+        
+        # Полноценный бинарный поиск (6 шагов гарантируют проверку всего диапазона 18-35 без пропусков)
+        for step in range(6):
+            if crf_low > crf_high:
+                break
+                
+            mid_crf = (crf_low + crf_high) // 2
+            if progress_callback:
+                progress_callback(10 + step * 10, f"Авто CRF: тест CRF {mid_crf}...")
+                
+            vmaf_scores = []
+            libvmaf_missing = False
+            
+            for i, ts in enumerate(timestamps):
+                chunk_path = os.path.join(temp_dir, f"auto_crf_{os.getpid()}_{int(time.time())}_{i}.mp4")
+                success, msg = self.ffmpeg_handler.encode_chunk(
+                    input_path, chunk_path, ts, chunk_duration, codec, mid_crf, preset_value, use_hardware, video_info, force_vfr_fix, process_setter
+                )
+                
+                if not success:
+                    logging.warning(f"Ошибка при Авто CRF encode (фрагмент {i}): {msg}")
+                    break
+                    
+                vmaf = self.ffmpeg_handler.calculate_vmaf(
+                    input_path, chunk_path, ts, chunk_duration, vmaf_subsample, width, video_info, force_vfr_fix, process_setter
+                )
+                
+                if os.path.exists(chunk_path):
+                    try: os.remove(chunk_path)
+                    except: pass
+                    
+                if vmaf < 0:
+                    libvmaf_missing = True
+                    break
+                
+                vmaf_scores.append(vmaf)
+                
+            if libvmaf_missing or not vmaf_scores:
+                logging.warning("VMAF вернул ошибку, прерываем поиск CRF.")
+                break
+                
+            avg_vmaf = sum(vmaf_scores) / len(vmaf_scores)
+            diff = abs(avg_vmaf - target_vmaf)
+            
+            logging.debug(f"Auto CRF: шаг {step+1}, тестируем CRF {mid_crf}, Avg VMAF={avg_vmaf:.2f}, Цель={target_vmaf}")
+            
+            # Ищем максимально возможный CRF (минимальный размер файла), который выдает VMAF >= Target
+            # Допуск 0.1 балла на погрешность (чтобы не браковать 89.9 при цели 90.0)
+            if avg_vmaf >= (target_vmaf - 0.1):
+                if mid_crf > best_crf_acceptable:
+                    best_crf_acceptable = mid_crf
+            
+            # Сохраняем запасной вариант (наименьшая разница), если ни один CRF не дотянул до цели
+            if diff < min_diff:
+                min_diff = diff
+                best_crf_closest = mid_crf
+                
+            if avg_vmaf < target_vmaf:
+                # Качество ниже цели -> нужен меньший CRF (лучшее качество)
+                crf_high = mid_crf - 1
+            else:
+                # Качество выше цели -> можем позволить себе больший CRF (меньший размер файла)
+                crf_low = mid_crf + 1
+                
+        final_crf = best_crf_acceptable if best_crf_acceptable != -1 else best_crf_closest
+        
+        if progress_callback:
+            progress_callback(60, f"Авто CRF завершен: выбран CRF {final_crf}")
+            
+        return final_crf
+    
     def run_chunk_test(self, input_path: str, codec: str, crf_value: int, preset_value: str,
-                       use_hardware: bool, process_setter: Optional[Callable] = None) -> dict:
-        """Алгоритм тестовых фрагментов (Chunk Testing) для точного определения выгоды сжатия."""
+                       use_hardware: bool, process_setter: Optional[Callable] = None,
+                       auto_crf: bool = False, target_vmaf: float = 95.0, force_vfr_fix: bool = False) -> dict:
         logging.info(f"Запуск алгоритма Chunk Test для {input_path}")
+        
+        if auto_crf:
+            crf_value = self.find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, process_setter, progress_callback=None, force_vfr_fix=force_vfr_fix)
+            logging.info(f"Chunk Test: Auto CRF определил лучшее значение {crf_value} для цели VMAF {target_vmaf}")
+            
         video_info = self.get_video_info(input_path)
         if "error" in video_info:
             raise Exception(video_info["error"])
 
         duration = video_info.get("duration", 0)
+        width = video_info.get("width", 1920)
         
-        # Получаем настройки
         settings = load_settings()
         chunk_count = settings.get("chunk_count", 3)
         chunk_duration = settings.get("chunk_duration", 10)
         vmaf_subsample = settings.get("vmaf_subsample", 5)
 
-        # Вычисляем таймкоды
         if duration < 30:
             chunk_count = 1
             chunk_duration = min(10, duration * 0.5)
@@ -103,20 +204,16 @@ class VideoProcessor:
 
         temp_dir = tempfile.gettempdir()
         total_size_bytes = 0
-        
         vmaf_scores = []
         libvmaf_missing = False
-        
         encode_time_total = 0.0
 
         for i, ts in enumerate(timestamps):
             out_path = os.path.join(temp_dir, f"chunk_test_{i}.mp4")
-            logging.debug(f"Кодирование фрагмента {i+1}/{chunk_count} на отметке {ts:.1f} сек...")
             
-            # Замеряем ТОЛЬКО время кодирования
             start_encode = time.time()
             success, msg = self.ffmpeg_handler.encode_chunk(
-                input_path, out_path, ts, chunk_duration, codec, crf_value, preset_value, use_hardware, process_setter
+                input_path, out_path, ts, chunk_duration, codec, crf_value, preset_value, use_hardware, video_info, force_vfr_fix, process_setter
             )
             encode_time_total += (time.time() - start_encode)
             
@@ -124,10 +221,8 @@ class VideoProcessor:
                 raise Exception(f"Ошибка при кодировании фрагмента {i+1}: {msg}")
             
             if os.path.exists(out_path):
-                # Считаем VMAF (время не учитывается в расчете скорости кодирования)
                 if not libvmaf_missing:
-                    logging.debug(f"Расчет VMAF для фрагмента {i+1}...")
-                    vmaf = self.ffmpeg_handler.calculate_vmaf(input_path, out_path, ts, chunk_duration, vmaf_subsample, process_setter)
+                    vmaf = self.ffmpeg_handler.calculate_vmaf(input_path, out_path, ts, chunk_duration, vmaf_subsample, width, video_info, force_vfr_fix, process_setter)
                     if vmaf == -2.0:
                         libvmaf_missing = True
                     elif vmaf >= 0:
@@ -138,11 +233,9 @@ class VideoProcessor:
 
         total_chunk_duration = chunk_duration * len(timestamps)
 
-        # Математика экстраполяции
         chunk_bitrate_bps = (total_size_bytes * 8) / total_chunk_duration
         est_size_mb = (chunk_bitrate_bps * duration) / 8 / (1024 * 1024)
         
-        # Исправлено: используем только время кодирования, а не общее время с VMAF
         if encode_time_total > 0:
             speed_multiplier = total_chunk_duration / encode_time_total
             est_time_sec = duration / speed_multiplier
@@ -154,14 +247,11 @@ class VideoProcessor:
         if orig_size_mb > 0:
             diff_percent = ((orig_size_mb - est_size_mb) / orig_size_mb) * 100
 
-        if diff_percent > 0:
-            diff_str = f"-{diff_percent:.1f}%"
-        else:
-            diff_str = f"+{abs(diff_percent):.1f}%"
+        if diff_percent > 0: diff_str = f"-{diff_percent:.1f}%"
+        else: diff_str = f"+{abs(diff_percent):.1f}%"
             
         avg_vmaf = sum(vmaf_scores) / len(vmaf_scores) if vmaf_scores else -1.0
-        if libvmaf_missing:
-            avg_vmaf = -2.0
+        if libvmaf_missing: avg_vmaf = -2.0
 
         logging.info(f"Chunk Test завершен: выгода {diff_str}, примерный размер {est_size_mb:.1f} МБ, VMAF: {avg_vmaf:.1f}")
 
@@ -178,11 +268,16 @@ class VideoProcessor:
                     preset_value: str, force_vfr_fix: bool, use_hardware: bool = False, 
                     progress_callback: Optional[Callable] = None,
                     process_setter: Optional[Callable] = None,
-                    output_dir: Optional[str] = None) -> str:
-        """Основной метод сжатия видео"""
+                    output_dir: Optional[str] = None,
+                    auto_crf: bool = False, target_vmaf: float = 95.0) -> str:
         input_p = Path(input_path)
-        if progress_callback: 
-            progress_callback(5, "Анализ видео...")
+        
+        if auto_crf:
+            crf_value = self.find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, process_setter, progress_callback, force_vfr_fix)
+            if progress_callback: progress_callback(15, f"Авто CRF: выбрано значение {crf_value}. Начинаем сжатие...")
+            logging.info(f"Для файла {input_p.name} автоматически выбран CRF {crf_value} (целевой VMAF {target_vmaf})")
+        else:
+            if progress_callback: progress_callback(5, "Анализ видео...")
         
         video_info = self.get_video_info(input_path)
         if "error" in video_info: 
@@ -200,10 +295,8 @@ class VideoProcessor:
             output_path = input_p.with_name(f"{input_p.stem}{COMPRESSED_VIDEO_SUFFIX}.{output_format}")
         
         if output_path.exists():
-            try:
-                output_path.unlink()
-            except Exception as e:
-                logging.error(f"Error deleting existing file: {e}")
+            try: output_path.unlink()
+            except Exception as e: logging.error(f"Error deleting existing file: {e}")
         
         current_input = input_path
         try:
@@ -244,7 +337,6 @@ class VideoProcessor:
 
     def extract_frame(self, input_path: str, frame_number: int, output_path: str,
                       process_setter: Optional[Callable] = None) -> str:
-        """Извлекает конкретный кадр из видео и сохраняет как изображение."""
         video_info = self.get_video_info(input_path)
         if "error" in video_info:
             raise Exception(video_info["error"])
@@ -272,7 +364,6 @@ class VideoProcessor:
                    progress_callback: Optional[Callable] = None,
                    process_setter: Optional[Callable] = None,
                    output_dir: Optional[str] = None) -> str:
-        """Метод для сокращения видео"""
         input_p = Path(input_path)
         if progress_callback:
             progress_callback(5, "Анализ длительности...")
@@ -301,10 +392,8 @@ class VideoProcessor:
             output_path = input_p.with_name(f"{input_p.stem}{TRIMMED_VIDEO_SUFFIX}{input_p.suffix}")
             
         if output_path.exists():
-            try:
-                output_path.unlink()
-            except Exception as e:
-                pass
+            try: output_path.unlink()
+            except Exception as e: pass
         
         def trim_progress(p, m):
             progress_callback(p, m) if progress_callback else None
@@ -326,7 +415,6 @@ class VideoProcessor:
                                 progress_callback: Optional[Callable] = None,
                                 process_setter: Optional[Callable] = None,
                                 output_dir: Optional[str] = None) -> str:
-        """Метод для нормализации громкости аудио"""
         input_p = Path(input_path)
         if output_dir:
             output_path = Path(output_dir) / f"{input_p.stem}_volnorm{input_p.suffix}"
@@ -334,10 +422,8 @@ class VideoProcessor:
             output_path = input_p.with_name(f"{input_p.stem}_volnorm{input_p.suffix}")
             
         if output_path.exists():
-            try:
-                output_path.unlink()
-            except Exception as e:
-                pass
+            try: output_path.unlink()
+            except Exception as e: pass
         
         def norm_progress(p, m):
             progress_callback(p, m) if progress_callback else None

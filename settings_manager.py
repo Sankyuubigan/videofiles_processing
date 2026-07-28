@@ -19,8 +19,8 @@ DEFAULT_SETTINGS = {
     "download_format": 0,
     "download_quality": 0,
     "vmaf_subsample": 5,
-    "chunk_count": 3,
-    "chunk_duration": 10
+    "chunk_count": 5,
+    "chunk_duration": 2
 }
 
 _settings_cache = None

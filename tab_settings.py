@@ -88,8 +88,11 @@ class SettingsTab(QWidget):
         chunk_layout = QHBoxLayout()
         chunk_layout.addWidget(QLabel("Точность Chunk Test:"))
         self.chunk_combo = QComboBox()
+        self.chunk_combo.addItem("Турбо (3 отрывка по 2 сек)", (3, 2))
+        self.chunk_combo.addItem("Оптимальный (5 отрывков по 2 сек) [Рекомендуется]", (5, 2))
         self.chunk_combo.addItem("Быстрый (2 отрывка по 5 сек)", (2, 5))
-        self.chunk_combo.addItem("Стандартный (3 отрывка по 10 сек) [По умолчанию]", (3, 10))
+        self.chunk_combo.addItem("Сбалансированный (3 отрывка по 5 сек)", (3, 5))
+        self.chunk_combo.addItem("Стандартный (3 отрывка по 10 сек)", (3, 10))
         self.chunk_combo.addItem("Точный (4 отрывка по 15 сек)", (4, 15))
         self.chunk_combo.addItem("Максимальный (5 отрывков по 20 сек)", (5, 20))
         chunk_layout.addWidget(self.chunk_combo)
@@ -134,8 +137,8 @@ class SettingsTab(QWidget):
         index = self.vmaf_combo.findData(vmaf_val)
         if index >= 0: self.vmaf_combo.setCurrentIndex(index)
         
-        c_count = settings.get("chunk_count", 3)
-        c_dur = settings.get("chunk_duration", 10)
+        c_count = settings.get("chunk_count", 5)
+        c_dur = settings.get("chunk_duration", 2)
         index = self.chunk_combo.findData((c_count, c_dur))
         if index >= 0: self.chunk_combo.setCurrentIndex(index)
         

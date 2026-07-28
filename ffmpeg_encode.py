@@ -106,12 +106,27 @@ class FFmpegEncodeMixin:
 
     def encode_chunk(self, input_path: str, output_path: str, start_time: float, duration: float,
                      codec: str, crf_value: int, preset_value: str, use_hardware: bool,
+                     video_info: dict = None, force_vfr_fix: bool = False,
                      process_setter: Optional[Callable] = None) -> tuple[bool, str]:
-        """Быстрое кодирование фрагмента видео для алгоритма Chunk Testing."""
         gpu_info = self.get_gpu_info()
         has_nvenc = "NVIDIA NVENC" in gpu_info
         
         cmd = [self.ffmpeg_path, "-y", "-ss", str(start_time), "-i", input_path, "-t", str(duration)]
+
+        vf_filters = []
+        needs_fix = force_vfr_fix or (video_info.get("needs_vfr_fix", False) if video_info else False)
+        
+        if needs_fix:
+            vf_filters.append(f"fps={DEFAULT_FPS_FIX}")
+            
+        if video_info and video_info.get("is_10bit", False) and codec != "libx265":
+            vf_filters.append("format=yuv420p")
+            
+        if codec == "libx264" and not use_hardware and not needs_fix:
+            vf_filters.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
+            
+        if vf_filters:
+            cmd.extend(["-vf", ",".join(vf_filters)])
 
         if codec == "libvpx-vp9":
             if use_hardware and has_nvenc: cmd.extend(["-c:v", "vp9_nvenc", "-crf", str(crf_value), "-b:v", "0"])
@@ -126,17 +141,35 @@ class FFmpegEncodeMixin:
         cmd.extend(["-c:a", "aac", "-b:a", "192k", output_path])
         return self._run_command_simple(cmd, process_setter)
 
-    def calculate_vmaf(self, original_path: str, chunk_path: str, start_time: float, duration: float, n_subsample: int = 5, process_setter: Optional[Callable] = None) -> float:
-        """Рассчитывает VMAF оценку (0-100) между оригинальным куском и сжатым."""
+    def calculate_vmaf(self, original_path: str, chunk_path: str, start_time: float, duration: float, 
+                       n_subsample: int = 5, width: int = 1920, video_info: dict = None, 
+                       force_vfr_fix: bool = False, process_setter: Optional[Callable] = None) -> float:
+        """Рассчитывает VMAF оценку (0-100) между оригинальным куском и сжатым с жесткой покадровой привязкой."""
         json_filename = f"vmaf_{os.getpid()}_{int(time.time() * 1000)}.json"
         json_path = os.path.join(tempfile.gettempdir(), json_filename)
         json_path_ff = json_path.replace('\\', '/').replace(':', '\\:')
+        
+        scale_filter = f",scale=1920:-1:flags=bicubic" if width > 1920 else ""
+        
+        needs_fix = force_vfr_fix or (video_info.get("needs_vfr_fix", False) if video_info else False)
+        fps = video_info.get("fps", 0) if video_info else 0
+        target_fps = DEFAULT_FPS_FIX if needs_fix else (fps if fps > 0 else 30)
+        
+        # Надежная синхронизация:
+        # 1. format=yuv420p гарантирует, что разница в цветовых профилях не занизит оценку
+        # 2. fps=... предотвращает дрифт таймстемпов из-за переменной частоты кадров (VFR)
+        # 3. setpts=PTS-STARTPTS привязывает начало обоих потоков строго к нулевой отметке
+        filter_complex = (
+            f"[0:v]fps={target_fps},setpts=PTS-STARTPTS,format=yuv420p{scale_filter}[ref];"
+            f"[1:v]fps={target_fps},setpts=PTS-STARTPTS,format=yuv420p{scale_filter}[dist];"
+            f"[dist][ref]libvmaf=model=version=vmaf_v0.6.1neg:log_fmt=json:log_path='{json_path_ff}':n_subsample={n_subsample}"
+        )
         
         cmd = [
             self.ffmpeg_path, "-y",
             "-ss", str(start_time), "-t", str(duration), "-i", original_path,
             "-i", chunk_path,
-            "-filter_complex", f"[1:v]setpts=PTS-STARTPTS[dist];[0:v]setpts=PTS-STARTPTS[ref];[dist][ref]libvmaf=log_fmt=json:log_path='{json_path_ff}':n_subsample={n_subsample}",
+            "-filter_complex", filter_complex,
             "-f", "null", "-"
         ]
         
