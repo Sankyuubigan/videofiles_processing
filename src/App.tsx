@@ -1,0 +1,334 @@
+import { useState, useEffect, useCallback } from 'react';
+import { listen } from '@tauri-apps/api/event';
+import { open } from '@tauri-apps/plugin-dialog';
+import { TabId, OperationTab } from './types';
+import { CODECS, OUTPUT_FORMATS } from './constants/codecs';
+import { useFileQueue } from './hooks/useFileQueue';
+import { useSettings } from './hooks/useSettings';
+import { useDragDrop } from './hooks/useDragDrop';
+import { tauriInvoke } from './hooks/useTauri';
+import { t, setLocale, Locale } from './i18n';
+import EditorTab from './components/tabs/EditorTab';
+import CompareTab from './components/tabs/CompareTab';
+import LogsTab from './components/tabs/LogsTab';
+import SettingsTab from './components/tabs/SettingsTab';
+import HelpTab from './components/tabs/HelpTab';
+import './styles.css';
+
+function App() {
+  const [activeTab, setActiveTab] = useState<TabId>('editor');
+  const [logs, setLogs] = useState<string[]>([]);
+  const [progress, setProgress] = useState({ percent: 0, message: 'Ready' });
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  // Editor state
+  const [selectedFormat, setSelectedFormat] = useState('mp4');
+  const [selectedCodec, setSelectedCodec] = useState('libx264');
+  const [useHardware, setUseHardware] = useState(false);
+  const [selectedPreset, setSelectedPreset] = useState('slow');
+  const [crfValue, setCrfValue] = useState(22);
+  const [autoCrf, setAutoCrf] = useState(true);
+  const [targetVmaf, setTargetVmaf] = useState(90.0);
+  const [forceVfrFix, setForceVfrFix] = useState(false);
+  const [operationTab, setOperationTab] = useState<OperationTab>('compress');
+
+  const { files, setFiles, selectedIndex, setSelectedIndex, addFiles, removeFile } = useFileQueue();
+  const { settings, ffmpegExists, saveSettings, checkFfmpeg, downloadFfmpeg } = useSettings();
+
+  // Sync locale from settings
+  useEffect(() => {
+    if (settings.locale) {
+      setLocale(settings.locale as Locale);
+    }
+  }, [settings.locale]);
+
+  const addLog = useCallback((msg: string) => {
+    const now = new Date();
+    const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+    setLogs(prev => [...prev, `[${ts}] ${msg}`]);
+  }, []);
+
+  const handleFileDrop = useCallback((paths: string[], _position: { x: number; y: number }) => {
+    addLog(`Dropped ${paths.length} file(s)`);
+    addFiles(paths);
+  }, [addFiles, addLog]);
+
+  const { isDragOver } = useDragDrop({
+    onDrop: handleFileDrop,
+    enabled: activeTab === 'editor',
+  });
+
+  // Listen for events from backend
+  useEffect(() => {
+    const unlisteners: (() => void)[] = [];
+    const setup = async () => {
+      unlisteners.push(await listen<[number, string]>('compress-progress', (e) => {
+        setProgress({ percent: e.payload[0], message: e.payload[1] });
+      }));
+      unlisteners.push(await listen<string>('log-message', (e) => {
+        const now = new Date();
+        const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+        setLogs(prev => [...prev, `[${ts}] ${e.payload}`]);
+      }));
+      unlisteners.push(await listen('compress-finished', () => {
+        setIsProcessing(false);
+        setProgress({ percent: 100, message: 'Done!' });
+      }));
+      unlisteners.push(await listen('batch-finished', () => {
+        setIsProcessing(false);
+        setProgress({ percent: 100, message: 'Batch done!' });
+      }));
+    };
+    setup();
+    return () => { unlisteners.forEach(u => u()); };
+  }, []);
+
+  const handleSelectFiles = useCallback(async () => {
+    const selected = await open({
+      multiple: true,
+      filters: [{ name: 'Video', extensions: ['mp4','avi','mkv','mov','webm'] }],
+    });
+    if (selected) {
+      const paths = Array.isArray(selected) ? selected : [selected];
+      addFiles(paths);
+    }
+  }, [addFiles]);
+
+  const handleSelectOutputDir = useCallback(async () => {
+    const dir = await open({ directory: true });
+    if (dir) {
+      await tauriInvoke('set_output_dir', { path: dir });
+    }
+  }, []);
+
+  const handleStartCompress = useCallback(async () => {
+    if (selectedIndex < 0 || selectedIndex >= files.length) return;
+    setIsProcessing(true);
+    setProgress({ percent: 0, message: 'Starting...' });
+    try {
+      await tauriInvoke('start_compress', {
+        fileIndex: selectedIndex,
+        outputFormat: selectedFormat,
+        codec: selectedCodec,
+        crfValue,
+        presetValue: selectedPreset,
+        forceVfrFix,
+        useHardware,
+        autoCrf,
+        targetVmaf,
+      });
+    } catch (e: any) {
+      addLog(`Error: ${e}`);
+      setIsProcessing(false);
+    }
+  }, [selectedIndex, files.length, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, addLog]);
+
+  const handleBatchCompress = useCallback(async () => {
+    if (files.length === 0) return;
+    setIsProcessing(true);
+    setProgress({ percent: 0, message: 'Starting batch...' });
+    try {
+      await tauriInvoke('start_batch_compress', {
+        outputFormat: selectedFormat,
+        codec: selectedCodec,
+        crfValue,
+        presetValue: selectedPreset,
+        forceVfrFix,
+        useHardware,
+        autoCrf,
+        targetVmaf,
+      });
+    } catch (e: any) {
+      addLog(`Batch error: ${e}`);
+      setIsProcessing(false);
+    }
+  }, [files.length, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, addLog]);
+
+  const handleCancel = useCallback(async () => {
+    try {
+      await tauriInvoke('cancel_processing');
+      setIsProcessing(false);
+      setProgress({ percent: 0, message: 'Cancelled' });
+    } catch (e) {
+      console.error('cancel error:', e);
+    }
+  }, []);
+
+  const handleTestFile = useCallback(async (index: number) => {
+    if (index < 0 || index >= files.length) return;
+    setIsProcessing(true);
+    try {
+      const result = await tauriInvoke<any>('run_chunk_test_cmd', {
+        fileIndex: index,
+        codec: selectedCodec,
+        crfValue,
+        presetValue: selectedPreset,
+        useHardware,
+        autoCrf,
+        targetVmaf,
+        forceVfrFix,
+      });
+      setFiles(prev => prev.map((f, i) => i === index ? { ...f, test_result: result } : f));
+    } catch (e: any) {
+      addLog(`Test error: ${e}`);
+    }
+    setIsProcessing(false);
+  }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, forceVfrFix, addLog, setFiles]);
+
+  const handleBatchTest = useCallback(async () => {
+    if (files.length === 0) return;
+    setIsProcessing(true);
+    try {
+      await tauriInvoke('run_batch_test', {
+        codec: selectedCodec,
+        crfValue,
+        presetValue: selectedPreset,
+        useHardware,
+        autoCrf,
+        targetVmaf,
+        forceVfrFix,
+      });
+    } catch (e: any) {
+      addLog(`Batch test error: ${e}`);
+    }
+    setIsProcessing(false);
+  }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, forceVfrFix, addLog]);
+
+  const handleTrim = useCallback(async (filePath: string, seconds: number, fromStart: boolean) => {
+    setIsProcessing(true);
+    try {
+      await tauriInvoke('trim_video_cmd', { filePath, seconds, fromStart });
+    } catch (e: any) {
+      addLog(`Trim error: ${e}`);
+      setIsProcessing(false);
+    }
+  }, [addLog]);
+
+  const handleNormalize = useCallback(async (filePath: string) => {
+    setIsProcessing(true);
+    try {
+      await tauriInvoke('normalize_audio_cmd', { filePath });
+    } catch (e: any) {
+      addLog(`Normalize error: ${e}`);
+      setIsProcessing(false);
+    }
+  }, [addLog]);
+
+  const handleExtractFrame = useCallback(async (filePath: string, frameNumber: number) => {
+    try {
+      const result = await tauriInvoke<string>('extract_frame_cmd', { filePath, frameNumber });
+      addLog(`Frame extracted: ${result}`);
+    } catch (e: any) {
+      addLog(`Extract frame error: ${e}`);
+    }
+  }, [addLog]);
+
+  // Update codec when format changes
+  const handleFormatChange = useCallback((fmt: string) => {
+    setSelectedFormat(fmt);
+    const formatInfo = OUTPUT_FORMATS[fmt];
+    if (formatInfo && !formatInfo.compatibleCodecs.includes(selectedCodec)) {
+      setSelectedCodec(formatInfo.defaultCodec);
+      const codecInfo = CODECS[formatInfo.defaultCodec];
+      if (codecInfo) {
+        setSelectedPreset(codecInfo.presetDefault);
+        setCrfValue(codecInfo.crfDefault);
+      }
+    }
+  }, [selectedCodec]);
+
+  // Update CRF range when codec changes
+  const handleCodecChange = useCallback((codec: string) => {
+    setSelectedCodec(codec);
+    const info = CODECS[codec];
+    if (info) {
+      setSelectedPreset(info.presetDefault);
+      if (crfValue < info.crfMin || crfValue > info.crfMax) {
+        setCrfValue(info.crfDefault);
+      }
+    }
+  }, [crfValue]);
+
+  // Вместо unmount для вкладок используем display: none / flex, чтобы не терять состояние
+  return (
+    <div className="app">
+      <div className="tabs-bar">
+        {(['editor','compare','logs','settings','help'] as TabId[]).map(tab => (
+          <button
+            key={tab}
+            className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab)}
+          >
+            {tab === 'editor' && t('tab.editor')}
+            {tab === 'compare' && t('tab.compare')}
+            {tab === 'logs' && t('tab.logs')}
+            {tab === 'settings' && t('tab.settings')}
+            {tab === 'help' && t('tab.help')}
+          </button>
+        ))}
+      </div>
+      <div className="tab-content">
+        <div style={{ display: activeTab === 'editor' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
+          <EditorTab
+            files={files}
+            selectedIndex={selectedIndex}
+            setSelectedIndex={setSelectedIndex}
+            isDragOver={isDragOver}
+            onSelectFiles={handleSelectFiles}
+            onSelectOutputDir={handleSelectOutputDir}
+            onRemoveFile={removeFile}
+            onTestFile={handleTestFile}
+            operationTab={operationTab}
+            setOperationTab={setOperationTab}
+            selectedFormat={selectedFormat}
+            onFormatChange={handleFormatChange}
+            selectedCodec={selectedCodec}
+            onCodecChange={handleCodecChange}
+            useHardware={useHardware}
+            setUseHardware={setUseHardware}
+            selectedPreset={selectedPreset}
+            setSelectedPreset={setSelectedPreset}
+            crfValue={crfValue}
+            setCrfValue={setCrfValue}
+            autoCrf={autoCrf}
+            setAutoCrf={setAutoCrf}
+            targetVmaf={targetVmaf}
+            setTargetVmaf={setTargetVmaf}
+            forceVfrFix={forceVfrFix}
+            setForceVfrFix={setForceVfrFix}
+            progress={progress}
+            isProcessing={isProcessing}
+            onStartCompress={handleStartCompress}
+            onBatchCompress={handleBatchCompress}
+            onBatchTest={handleBatchTest}
+            onCancel={handleCancel}
+            onTrim={handleTrim}
+            onNormalize={handleNormalize}
+            onExtractFrame={handleExtractFrame}
+            filesCount={files.length}
+          />
+        </div>
+        <div style={{ display: activeTab === 'compare' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
+          <CompareTab addLog={addLog} />
+        </div>
+        <div style={{ display: activeTab === 'logs' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
+          <LogsTab logs={logs} />
+        </div>
+        <div style={{ display: activeTab === 'settings' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
+          <SettingsTab
+            settings={settings}
+            ffmpegExists={ffmpegExists}
+            onSave={saveSettings}
+            onCheckFfmpeg={checkFfmpeg}
+            onDownloadFfmpeg={downloadFfmpeg}
+          />
+        </div>
+        <div style={{ display: activeTab === 'help' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
+          <HelpTab />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;

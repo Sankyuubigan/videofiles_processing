@@ -1,0 +1,175 @@
+use std::sync::atomic::Ordering;
+use tauri::{AppHandle, Emitter, State};
+use log::{error, warn};
+
+use crate::commands::file_commands::{FileQueueState, TestResult};
+use crate::video_processor::chunk_test::run_chunk_test;
+
+use super::compress_commands::ProcessingState;
+
+#[tauri::command]
+pub fn run_chunk_test_cmd(
+    file_index: usize,
+    codec: String,
+    crf_value: i32,
+    preset_value: String,
+    use_hardware: bool,
+    auto_crf: bool,
+    target_vmaf: f64,
+    force_vfr_fix: bool,
+    queue_state: State<FileQueueState>,
+    proc_state: State<ProcessingState>,
+) -> Result<TestResult, String> {
+    {
+        let mut is_proc = proc_state.is_processing.lock().map_err(|e| {
+            let msg = format!("Failed to lock processing state: {}", e);
+            error!("{}", msg);
+            msg
+        })?;
+        if *is_proc {
+            warn!("Chunk test rejected: already processing");
+            return Err("Already processing".to_string());
+        }
+        *is_proc = true;
+    }
+    proc_state.cancel_flag.store(false, Ordering::Relaxed);
+
+    let path = {
+        let files = queue_state.files.lock().map_err(|e| {
+            let msg = format!("Failed to lock file queue: {}", e);
+            error!("{}", msg);
+            msg
+        })?;
+        files.get(file_index).ok_or_else(|| {
+            let msg = format!("Invalid file index: {}", file_index);
+            error!("{}", msg);
+            msg
+        })?.path.clone()
+    };
+
+    let path_for_log = path.clone();
+    let cancel = proc_state.cancel_flag.clone();
+    let result = std::thread::spawn(move || {
+        run_chunk_test(&path, &codec, crf_value, &preset_value, use_hardware, cancel, auto_crf, target_vmaf, force_vfr_fix)
+    }).join().map_err(|_| {
+        let msg = "Chunk test thread panicked".to_string();
+        error!("{}", msg);
+        msg
+    })?;
+
+    {
+        let mut is_proc = proc_state.is_processing.lock().map_err(|e| {
+            let msg = format!("Failed to unlock processing state: {}", e);
+            error!("{}", msg);
+            msg
+        })?;
+        *is_proc = false;
+    }
+
+    match result {
+        Ok(r) => {
+            let test_result = TestResult {
+                test_diff: r.test_diff,
+                test_est_size: r.test_est_size,
+                test_est_time: r.test_est_time,
+                test_vmaf: r.test_vmaf,
+                is_profitable: r.is_profitable,
+            };
+            if let Ok(mut files) = queue_state.files.lock() {
+                if let Some(entry) = files.get_mut(file_index) {
+                    entry.test_result = Some(test_result.clone());
+                }
+            }
+            Ok(test_result)
+        }
+        Err(e) => {
+            error!("Chunk test failed for {}: {}", path_for_log, e);
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn run_batch_test(
+    codec: String,
+    crf_value: i32,
+    preset_value: String,
+    use_hardware: bool,
+    auto_crf: bool,
+    target_vmaf: f64,
+    force_vfr_fix: bool,
+    app: AppHandle,
+    queue_state: State<FileQueueState>,
+    proc_state: State<ProcessingState>,
+) -> Result<Vec<TestResult>, String> {
+    {
+        let mut is_proc = proc_state.is_processing.lock().map_err(|e| {
+            let msg = format!("Failed to lock processing state: {}", e);
+            error!("{}", msg);
+            msg
+        })?;
+        if *is_proc {
+            warn!("Batch test rejected: already processing");
+            return Err("Already processing".to_string());
+        }
+        *is_proc = true;
+    }
+    proc_state.cancel_flag.store(false, Ordering::Relaxed);
+
+    let files = queue_state.files.lock().map_err(|e| {
+        let msg = format!("Failed to lock file queue: {}", e);
+        error!("{}", msg);
+        msg
+    })?.clone();
+    let total = files.len();
+    let mut results = Vec::new();
+
+    for (i, file) in files.iter().enumerate() {
+        if proc_state.cancel_flag.load(Ordering::Relaxed) { break; }
+        let cancel = proc_state.cancel_flag.clone();
+        let path = file.path.clone();
+        let codec = codec.clone();
+        let preset = preset_value.clone();
+
+        let result = std::thread::spawn(move || {
+            run_chunk_test(&path, &codec, crf_value, &preset, use_hardware, cancel, auto_crf, target_vmaf, force_vfr_fix)
+        }).join().map_err(|_| {
+            let msg = format!("Batch test thread panicked for {}", file.path);
+            error!("{}", msg);
+            msg
+        })?;
+
+        match result {
+            Ok(r) => {
+                let test_result = TestResult {
+                    test_diff: r.test_diff,
+                    test_est_size: r.test_est_size,
+                    test_est_time: r.test_est_time,
+                    test_vmaf: r.test_vmaf,
+                    is_profitable: r.is_profitable,
+                };
+                if let Ok(mut files) = queue_state.files.lock() {
+                    if let Some(entry) = files.get_mut(i) {
+                        entry.test_result = Some(test_result.clone());
+                    }
+                }
+                let _ = app.emit("batch-test-progress", (i + 1, total));
+                results.push(test_result);
+            }
+            Err(e) => {
+                error!("Error testing file {}: {}", file.path, e);
+            }
+        }
+    }
+
+    {
+        let mut is_proc = proc_state.is_processing.lock().map_err(|e| {
+            let msg = format!("Failed to unlock processing state: {}", e);
+            error!("{}", msg);
+            msg
+        })?;
+        *is_proc = false;
+    }
+    let _ = app.emit("batch-test-finished", ());
+    Ok(results)
+}

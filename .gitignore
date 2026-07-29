@@ -1,13 +1,27 @@
-/ffprobe.exe
-/ffmpeg.exe
-/env_flet_compressor
-/__pycache__
-env
-/downloads
-/chrome
-/build
-/dist
-/release
-yt_dlp
-/deno
-/cookies
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temp
+temp/
+test/
+/ffmpeg
+/old_code_python
+/package-lock.json
+/src-tauri/Cargo.lock

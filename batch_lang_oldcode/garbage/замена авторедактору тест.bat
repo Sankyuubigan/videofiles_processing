@@ -1,1 +1,0 @@
-silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-90dB
