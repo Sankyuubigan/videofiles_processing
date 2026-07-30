@@ -111,6 +111,57 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
           </select>
         </div>
       </div>
+
+      <div className="settings-group">
+        <h3>{t('settings.auto_skip')}</h3>
+        <div className="settings-row">
+          <div className="checkbox-row">
+            <input
+              type="checkbox"
+              id="skipDiff"
+              checked={localSettings.skip_min_diff_enabled}
+              onChange={(e) => autoSave({ ...localSettings, skip_min_diff_enabled: e.target.checked })}
+            />
+            <label htmlFor="skipDiff">{t('settings.skip_min_diff')}</label>
+          </div>
+          {localSettings.skip_min_diff_enabled && (
+            <div className="value-input">
+              <input
+                type="number"
+                min={1}
+                max={50}
+                step={0.5}
+                value={localSettings.skip_min_diff_percent}
+                onChange={(e) => autoSave({ ...localSettings, skip_min_diff_percent: parseFloat(e.target.value) || 5.0 })}
+              />
+              <span>%</span>
+            </div>
+          )}
+        </div>
+        <div className="settings-row">
+          <div className="checkbox-row">
+            <input
+              type="checkbox"
+              id="skipCrf"
+              checked={localSettings.skip_min_crf_enabled}
+              onChange={(e) => autoSave({ ...localSettings, skip_min_crf_enabled: e.target.checked })}
+            />
+            <label htmlFor="skipCrf">{t('settings.skip_min_crf')}</label>
+          </div>
+          {localSettings.skip_min_crf_enabled && (
+            <div className="value-input">
+              <input
+                type="number"
+                min={0}
+                max={51}
+                step={1}
+                value={localSettings.skip_min_crf_value}
+                onChange={(e) => autoSave({ ...localSettings, skip_min_crf_value: parseFloat(e.target.value) || 18.0 })}
+              />
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

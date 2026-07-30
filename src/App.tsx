@@ -33,8 +33,9 @@ function App() {
   const [forceVfrFix, setForceVfrFix] = useState(false);
   const [operationTab, setOperationTab] = useState<OperationTab>('compress');
 
-  const { files, setFiles, selectedIndex, setSelectedIndex, addFiles, removeFile } = useFileQueue();
+  const { files, setFiles, selectedIndex, setSelectedIndex, addFiles, removeFile, clearQueue } = useFileQueue();
   const { settings, ffmpegExists, saveSettings, checkFfmpeg, downloadFfmpeg } = useSettings();
+  const [outputDir, setOutputDir] = useState<string | null>(null);
 
   // Sync locale from settings
   useEffect(() => {
@@ -42,6 +43,13 @@ function App() {
       setLocale(settings.locale as Locale);
     }
   }, [settings.locale]);
+
+  // Load output dir on mount
+  useEffect(() => {
+    tauriInvoke<string | null>('get_output_dir').then(dir => {
+      setOutputDir(dir || null);
+    }).catch(() => {});
+  }, []);
 
   const addLog = useCallback((msg: string) => {
     const now = new Date();
@@ -81,6 +89,11 @@ function App() {
         setIsPaused(false);
         setProgress({ percent: 100, message: 'Batch done!' });
       }));
+      unlisteners.push(await listen<{ index: number; path: string; success: boolean }>('batch-file-done', (e) => {
+        if (e.payload.success) {
+          setFiles(prev => prev.filter(f => f.path !== e.payload.path));
+        }
+      }));
     };
     setup();
     return () => { unlisteners.forEach(u => u()); };
@@ -101,6 +114,7 @@ function App() {
     const dir = await open({ directory: true });
     if (dir) {
       await tauriInvoke('set_output_dir', { path: dir });
+      setOutputDir(dir);
     }
   }, []);
 
@@ -332,6 +346,8 @@ function App() {
             onNormalize={handleNormalize}
             onExtractFrame={handleExtractFrame}
             filesCount={files.length}
+            outputDir={outputDir}
+            onClearTable={clearQueue}
           />
         </div>
         <div style={{ display: activeTab === 'compare' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>

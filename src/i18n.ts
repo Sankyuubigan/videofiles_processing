@@ -13,6 +13,8 @@ const translations: Record<Locale, Record<string, string>> = {
     'editor.select_files': '1. Select video files',
     'editor.select_btn': 'Select file(s)',
     'editor.output_dir': 'Output dir',
+    'editor.output_dir_default': 'same as source',
+    'editor.clear_table': 'Clear table',
     'editor.in_queue': 'In queue: {count} files',
     'editor.drop_hint': 'Drag and drop files here or click "Select file(s)"',
 
@@ -59,6 +61,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'settings.locale_ru': 'Russian',
     'settings.save': 'Save Settings',
     'settings.saving': 'Saving...',
+    'settings.auto_skip': 'Auto Mode Skip',
+    'settings.skip_min_diff': 'Min size reduction:',
+    'settings.skip_min_crf': 'Skip if original CRF >=',
 
     // Logs
     'logs.no_logs': 'No logs yet...',
@@ -75,6 +80,8 @@ const translations: Record<Locale, Record<string, string>> = {
     'editor.select_files': '1. Выберите видеофайлы',
     'editor.select_btn': 'Выбрать файл(ы)',
     'editor.output_dir': 'Папка вывода',
+    'editor.output_dir_default': 'рядом с исходным',
+    'editor.clear_table': 'Очистить таблицу',
     'editor.in_queue': 'В очереди: {count} файлов',
     'editor.drop_hint': 'Перетащите файлы сюда или нажмите "Выбрать файл(ы)"',
 
@@ -121,6 +128,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'settings.locale_ru': 'Русский',
     'settings.save': 'Сохранить настройки',
     'settings.saving': 'Сохранение...',
+    'settings.auto_skip': 'Пропуск в авторежиме',
+    'settings.skip_min_diff': 'Мин. уменьшение размера:',
+    'settings.skip_min_crf': 'Пропускать если CRF оригинала >=',
 
     // Logs
     'logs.no_logs': 'Пока нет логов...',

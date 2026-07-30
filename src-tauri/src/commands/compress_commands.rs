@@ -54,7 +54,7 @@ pub async fn start_compress(
     proc_state.is_paused.store(false, Ordering::Relaxed);
     proc_state.current_child_pid.store(0, Ordering::Release);
 
-    let (path, output_dir) = {
+    let (path, output_dir, test_result) = {
         let files = queue_state.files.lock().map_err(|e| {
             let msg = format!("Failed to lock file queue: {}", e);
             error!("{}", msg);
@@ -66,12 +66,13 @@ pub async fn start_compress(
             msg
         })?;
         let path = file.path.clone();
+        let test_result = file.test_result.clone();
         let output_dir = queue_state.output_dir.lock().map_err(|e| {
             let msg = format!("Failed to lock output dir: {}", e);
             error!("{}", msg);
             msg
         })?.clone();
-        (path, output_dir)
+        (path, output_dir, test_result)
     };
 
     info!("Starting compress: {} -> {} ({}, crf={}, preset={})", path, output_format, codec, crf_value, preset_value);
@@ -90,7 +91,8 @@ pub async fn start_compress(
         compress_video(
             &path, &output_format, &codec, crf_value, &preset_value,
             force_vfr_fix, use_hardware, cancel, Some(progress_cb),
-            output_dir.as_deref(), auto_crf, target_vmaf, Some(child_pid),
+            output_dir.as_deref(), auto_crf, target_vmaf,
+            test_result.as_ref(), Some(child_pid),
         )
     }).await.map_err(|_| {
         let msg = "Compress thread panicked".to_string();
@@ -182,6 +184,7 @@ pub async fn start_batch_compress(
         let child_pid = proc_state.current_child_pid.clone();
 
         let path_for_log = path.clone();
+        let file_test_result = file.test_result.clone();
         let result = tokio::task::spawn_blocking(move || {
             let progress_cb = {
                 let app = app_clone.clone();
@@ -193,7 +196,8 @@ pub async fn start_batch_compress(
             compress_video(
                 &path, &of, &co, crf_value, &pv,
                 force_vfr_fix, use_hardware, cancel, Some(progress_cb),
-                out_dir.as_deref(), auto_crf, target_vmaf, Some(child_pid),
+                out_dir.as_deref(), auto_crf, target_vmaf,
+                file_test_result.as_ref(), Some(child_pid),
             )
         }).await.map_err(|_| {
             let msg = "Batch compress thread panicked".to_string();
@@ -206,6 +210,12 @@ pub async fn start_batch_compress(
         if let Err(ref e) = result {
             error!("Batch compress failed for {}: {}", path_for_log, e);
         }
+        let success = result.is_ok();
+        let _ = app.emit("batch-file-done", serde_json::json!({
+            "index": i,
+            "path": path_for_log,
+            "success": success
+        }));
         results.push(result);
     }
 

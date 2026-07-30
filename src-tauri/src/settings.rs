@@ -12,10 +12,30 @@ pub struct Settings {
     pub chunk_duration: usize,
     #[serde(default = "default_locale")]
     pub locale: String,
+    #[serde(default = "default_true")]
+    pub skip_min_diff_enabled: bool,
+    #[serde(default = "default_min_diff")]
+    pub skip_min_diff_percent: f64,
+    #[serde(default = "default_true")]
+    pub skip_min_crf_enabled: bool,
+    #[serde(default = "default_min_crf")]
+    pub skip_min_crf_value: f64,
 }
 
 fn default_locale() -> String {
     "en".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_min_diff() -> f64 {
+    5.0
+}
+
+fn default_min_crf() -> f64 {
+    18.0
 }
 
 impl Default for Settings {
@@ -26,6 +46,10 @@ impl Default for Settings {
             chunk_count: 5,
             chunk_duration: 2,
             locale: "en".to_string(),
+            skip_min_diff_enabled: true,
+            skip_min_diff_percent: 5.0,
+            skip_min_crf_enabled: true,
+            skip_min_crf_value: 18.0,
         }
     }
 }

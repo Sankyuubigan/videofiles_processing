@@ -51,6 +51,10 @@ export interface Settings {
   chunk_count: number;
   chunk_duration: number;
   locale: string;
+  skip_min_diff_enabled: boolean;
+  skip_min_diff_percent: number;
+  skip_min_crf_enabled: boolean;
+  skip_min_crf_value: number;
 }
 
 export type Locale = 'en' | 'ru';

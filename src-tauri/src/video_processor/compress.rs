@@ -8,7 +8,9 @@ use crate::crf_extractor::get_crf_from_file;
 use crate::estimator::estimate_video_complexity;
 use crate::ffmpeg::encode::{compress_video_core, compress_video_core_no_subtitles, compress_video_core_full_map, fix_vfr_target_crf};
 use crate::ffmpeg::probe::{get_gpu_info, get_video_info_raw, VideoInfo};
+use crate::settings::Settings;
 use crate::video_processor::chunk_test::find_best_crf;
+use crate::commands::file_commands::TestResult;
 
 pub fn get_full_video_info(input_path: &str) -> Result<VideoInfo, String> {
     let mut info = get_video_info_raw(input_path)?;
@@ -24,6 +26,47 @@ pub fn get_full_video_info(input_path: &str) -> Result<VideoInfo, String> {
     Ok(info)
 }
 
+pub fn check_auto_skip(
+    input_path: &str,
+    video_info: &VideoInfo,
+    test_result: Option<&TestResult>,
+    settings: &Settings,
+) -> Option<String> {
+    let filename = Path::new(input_path).file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| input_path.to_string());
+
+    if settings.skip_min_diff_enabled {
+        if let Some(tr) = test_result {
+            let diff_str = tr.test_diff.trim();
+            let is_reduction = diff_str.starts_with('-');
+            if let Ok(diff) = diff_str.trim_start_matches(|c: char| c == '-' || c == '+')
+                .trim_end_matches('%').parse::<f64>()
+            {
+                if !is_reduction || diff < settings.skip_min_diff_percent {
+                    return Some(format!(
+                        "SKIP: {} — size reduction {:.1}% < minimum {:.1}%",
+                        filename, diff, settings.skip_min_diff_percent
+                    ));
+                }
+            }
+        }
+    }
+
+    if settings.skip_min_crf_enabled {
+        if let Some(crf) = video_info.crf_value {
+            if crf >= settings.skip_min_crf_value {
+                return Some(format!(
+                    "SKIP: {} — original CRF {} >= minimum CRF {}",
+                    filename, crf, settings.skip_min_crf_value
+                ));
+            }
+        }
+    }
+
+    None
+}
+
 pub fn compress_video(
     input_path: &str, output_format: &str, codec: &str, crf_value: i32,
     preset_value: &str, force_vfr_fix: bool, use_hardware: bool,
@@ -31,19 +74,11 @@ pub fn compress_video(
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     output_dir: Option<&str>,
     auto_crf: bool, target_vmaf: f64,
+    test_result: Option<&TestResult>,
     child_pid: Option<Arc<AtomicU32>>,
 ) -> Result<String, String> {
     let input_p = Path::new(input_path);
     let mut actual_crf = crf_value;
-
-    if auto_crf {
-        actual_crf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix);
-        if let Some(ref cb) = progress_cb {
-            cb(15, format!("Auto CRF: selected {}. Starting compress...", actual_crf));
-        }
-    } else if let Some(ref cb) = progress_cb {
-        cb(5, "Analyzing video...".to_string());
-    }
 
     let video_info = get_full_video_info(input_path).map_err(|e| {
         error!("Failed to get video info for {}: {}", input_path, e);
@@ -53,6 +88,37 @@ pub fn compress_video(
     if duration <= 0.0 {
         error!("Invalid video duration for {}: {}", input_path, duration);
         return Err("Invalid video duration".to_string());
+    }
+
+    if auto_crf {
+        let settings = crate::settings::load_settings();
+        if let Some(reason) = check_auto_skip(input_path, &video_info, test_result, &settings) {
+            warn!("{}", reason);
+            if let Some(ref cb) = progress_cb {
+                cb(100, reason.clone());
+            }
+            return Err(reason);
+        }
+        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix);
+        match acrf.crf {
+            Some(crf) => {
+                actual_crf = crf;
+                if let Some(ref cb) = progress_cb {
+                    cb(15, format!("Auto CRF: selected {}. Starting compress...", actual_crf));
+                }
+            }
+            None => {
+                let filename = input_p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| input_path.to_string());
+                let msg = format!("SKIP: {} — target VMAF {} unreachable (best achieved: {:.1})", filename, target_vmaf, acrf.best_vmaf);
+                warn!("{}", msg);
+                if let Some(ref cb) = progress_cb {
+                    cb(100, msg.clone());
+                }
+                return Err(msg);
+            }
+        }
+    } else if let Some(ref cb) = progress_cb {
+        cb(5, "Analyzing video...".to_string());
     }
 
     let needs_fix = force_vfr_fix || video_info.needs_vfr_fix;
@@ -105,8 +171,28 @@ pub fn compress_video(
         }
     }
 
-    if let Some(cb) = progress_cb {
+    let original_size = video_info.size_mb;
+    let compressed_size = std::fs::metadata(&output_path)
+        .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+        .unwrap_or(0.0);
+
+    if original_size > 0.0 && compressed_size > 0.0 {
+        let diff_percent = ((original_size - compressed_size) / original_size) * 100.0;
+        let filename = input_p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| input_path.to_string());
+        if diff_percent > 0.0 {
+            info!("Compressed: {} — size reduced by {:.1}% ({:.1} MB -> {:.1} MB)", filename, diff_percent, original_size, compressed_size);
+            if let Some(ref cb) = progress_cb {
+                cb(100, format!("Done! Size reduced by {:.1}%", diff_percent));
+            }
+        } else {
+            info!("Compressed: {} — size INCREASED by {:.1}% ({:.1} MB -> {:.1} MB)", filename, diff_percent.abs(), original_size, compressed_size);
+            if let Some(ref cb) = progress_cb {
+                cb(100, format!("Done! Size increased by {:.1}%", diff_percent.abs()));
+            }
+        }
+    } else if let Some(cb) = progress_cb {
         cb(100, "Done!".to_string());
     }
+
     Ok(output_str)
 }

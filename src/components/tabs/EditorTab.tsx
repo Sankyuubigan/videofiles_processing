@@ -44,6 +44,8 @@ interface Props {
   onNormalize: (path: string) => void;
   onExtractFrame: (path: string, frame: number) => void;
   filesCount: number;
+  outputDir: string | null;
+  onClearTable: () => void;
 }
 
 export default function EditorTab(props: Props) {
@@ -54,6 +56,17 @@ export default function EditorTab(props: Props) {
           <label>{t('editor.select_files')}</label>
           <button className="action-btn" onClick={props.onSelectFiles}>{t('editor.select_btn')}</button>
           <button className="action-btn" onClick={props.onSelectOutputDir}>{t('editor.output_dir')}</button>
+          {props.outputDir && (
+            <span className="output-dir-label" title={props.outputDir}>
+              {props.outputDir.length > 40 ? '...' + props.outputDir.slice(-37) : props.outputDir}
+            </span>
+          )}
+          {!props.outputDir && (
+            <span className="output-dir-label dim">{t('editor.output_dir_default')}</span>
+          )}
+          <button className="action-btn delete" onClick={props.onClearTable} disabled={props.filesCount === 0 || props.isProcessing}>
+            {t('editor.clear_table')}
+          </button>
           <span className="queue-info">{t('editor.in_queue', { count: props.filesCount })}</span>
         </div>
         <div

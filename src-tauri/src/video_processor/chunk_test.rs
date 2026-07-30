@@ -7,15 +7,22 @@ use crate::estimator::format_duration;
 use crate::ffmpeg::encode::{calculate_vmaf, encode_chunk};
 use crate::video_processor::compress::get_full_video_info;
 
+pub struct AutoCrfResult {
+    pub crf: Option<i32>,
+    pub best_vmaf: f64,
+    pub target_vmaf: f64,
+}
+
 pub fn find_best_crf(
     input_path: &str, codec: &str, preset_value: &str, use_hardware: bool,
     target_vmaf: f64, cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     force_vfr_fix: bool,
-) -> i32 {
+) -> AutoCrfResult {
+    let default_crf = get_codecs().get(codec).map(|c| c.crf_default).unwrap_or(22);
     let video_info = match get_full_video_info(input_path) {
         Ok(i) => i,
-        Err(_) => return get_codecs().get(codec).map(|c| c.crf_default).unwrap_or(22),
+        Err(_) => return AutoCrfResult { crf: Some(default_crf), best_vmaf: 0.0, target_vmaf },
     };
     let width = video_info.width;
     let duration = video_info.duration;
@@ -29,7 +36,7 @@ pub fn find_best_crf(
             }
             None => {
                 log::error!("No codecs available and libx264 not found");
-                return 22;
+                return AutoCrfResult { crf: Some(22), best_vmaf: 0.0, target_vmaf };
             }
         },
     };
@@ -53,8 +60,10 @@ pub fn find_best_crf(
     };
 
     let mut best_crf_closest = codec_info.crf_default;
+    let mut best_vmaf_closest = 0.0_f64;
     let mut min_diff = f64::MAX;
     let mut best_crf_acceptable = -1;
+    let mut best_vmaf_acceptable = 0.0_f64;
     let temp_dir = std::env::temp_dir();
 
     for step in 0..6 {
@@ -104,10 +113,12 @@ pub fn find_best_crf(
 
         if avg_vmaf >= (target_vmaf - 0.1) && mid_crf > best_crf_acceptable {
             best_crf_acceptable = mid_crf;
+            best_vmaf_acceptable = avg_vmaf;
         }
         if diff < min_diff {
             min_diff = diff;
             best_crf_closest = mid_crf;
+            best_vmaf_closest = avg_vmaf;
         }
         if avg_vmaf < target_vmaf {
             crf_high = mid_crf - 1;
@@ -116,12 +127,25 @@ pub fn find_best_crf(
         }
     }
 
-    let final_crf = if best_crf_acceptable != -1 { best_crf_acceptable } else { best_crf_closest };
-    info!("Auto CRF done: selected CRF {} for target VMAF {}", final_crf, target_vmaf);
-    if let Some(cb) = progress_cb {
-        cb(60, format!("Auto CRF done: CRF {}", final_crf));
+    let (final_crf, best_vmaf) = if best_crf_acceptable != -1 {
+        (Some(best_crf_acceptable), best_vmaf_acceptable)
+    } else {
+        (None, best_vmaf_closest)
+    };
+
+    if let Some(crf) = final_crf {
+        info!("Auto CRF done: selected CRF {} for target VMAF {} (achieved: {:.1})", crf, target_vmaf, best_vmaf);
+        if let Some(cb) = progress_cb {
+            cb(60, format!("Auto CRF done: CRF {}", crf));
+        }
+    } else {
+        warn!("Auto CRF: target VMAF {} unreachable. Best CRF {} gives VMAF {:.1}", target_vmaf, best_crf_closest, best_vmaf);
+        if let Some(cb) = progress_cb {
+            cb(60, format!("Auto CRF: target VMAF {} unreachable (best: {:.1})", target_vmaf, best_vmaf));
+        }
     }
-    final_crf
+
+    AutoCrfResult { crf: final_crf, best_vmaf, target_vmaf }
 }
 
 pub struct ChunkTestResult {
@@ -141,7 +165,11 @@ pub fn run_chunk_test(
     let mut actual_crf = crf_value;
     if auto_crf {
         info!("Chunk Test: Auto CRF enabled, target VMAF={}", target_vmaf);
-        actual_crf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, cancel_flag.clone(), None, force_vfr_fix);
+        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, cancel_flag.clone(), None, force_vfr_fix);
+        actual_crf = acrf.crf.unwrap_or_else(|| {
+            warn!("Chunk Test: Auto CRF target unreachable, using fallback CRF (best VMAF: {:.1})", acrf.best_vmaf);
+            crf_value  // fallback to user-provided CRF for the test
+        });
         info!("Chunk Test: Auto CRF selected CRF {}", actual_crf);
     }
 

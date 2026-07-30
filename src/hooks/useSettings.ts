@@ -8,6 +8,10 @@ const DEFAULT_SETTINGS: Settings = {
   chunk_count: 5,
   chunk_duration: 2,
   locale: 'en',
+  skip_min_diff_enabled: true,
+  skip_min_diff_percent: 5.0,
+  skip_min_crf_enabled: true,
+  skip_min_crf_value: 18.0,
 };
 
 export function useSettings() {
