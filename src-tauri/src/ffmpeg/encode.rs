@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use log::warn;
 
 use super::core::{run_command_with_progress, run_command_simple, RunResult};
@@ -10,6 +10,7 @@ pub fn fix_vfr_target_crf(
     input_path: &str, output_path: &str, output_format: &str, codec: &str, crf_value: i32,
     preset_value: &str, duration_seconds: f64, use_hardware: bool, video_info: &super::probe::VideoInfo,
     cancel_flag: Arc<AtomicBool>, progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -63,7 +64,7 @@ pub fn fix_vfr_target_crf(
         cmd.extend(["-movflags".to_string(), "+faststart".to_string()]);
     }
     cmd.extend(["-progress".to_string(), "pipe:1".to_string(), output_path.to_string()]);
-    run_command_with_progress(&cmd, Some(duration_seconds), "VFR-fix+compress", cancel_flag, progress_cb)
+    run_command_with_progress(&cmd, Some(duration_seconds), "VFR-fix+compress", cancel_flag, progress_cb, child_pid)
 }
 
 pub fn compress_video_core(
@@ -71,6 +72,7 @@ pub fn compress_video_core(
     preset_value: &str, duration_seconds: f64, video_info: &super::probe::VideoInfo,
     use_hardware: bool, cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -127,7 +129,7 @@ pub fn compress_video_core(
         cmd.extend(["-movflags".to_string(), "+faststart".to_string()]);
     }
     cmd.extend(["-progress".to_string(), "pipe:1".to_string(), output_path.to_string()]);
-    run_command_with_progress(&cmd, Some(duration_seconds), "Compress", cancel_flag, progress_cb)
+    run_command_with_progress(&cmd, Some(duration_seconds), "Compress", cancel_flag, progress_cb, child_pid)
 }
 
 pub fn compress_video_core_no_subtitles(
@@ -135,10 +137,11 @@ pub fn compress_video_core_no_subtitles(
     preset_value: &str, duration_seconds: f64, video_info: &super::probe::VideoInfo,
     use_hardware: bool, cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> RunResult {
     let mut info_clone = video_info.clone();
     info_clone.has_subtitles = false;
-    compress_video_core(input_path, output_path, output_format, codec, crf_value, preset_value, duration_seconds, &info_clone, use_hardware, cancel_flag, progress_cb)
+    compress_video_core(input_path, output_path, output_format, codec, crf_value, preset_value, duration_seconds, &info_clone, use_hardware, cancel_flag, progress_cb, child_pid)
 }
 
 pub fn compress_video_core_full_map(
@@ -146,11 +149,12 @@ pub fn compress_video_core_full_map(
     preset_value: &str, duration_seconds: f64,
     cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> RunResult {
     let mut cmd = vec!["ffmpeg".to_string(), "-y".to_string(), "-i".to_string(), input_path.to_string()];
     cmd.extend(["-c:v".to_string(), "libx264".to_string(), "-crf".to_string(), crf_value.to_string(), "-preset".to_string(), preset_value.to_string(), "-c:a".to_string(), "aac".to_string(), "-b:a".to_string(), "192k".to_string()]);
     cmd.extend(["-map".to_string(), "0".to_string(), "-map".to_string(), "-0:d".to_string(), "-progress".to_string(), "pipe:1".to_string(), output_path.to_string()]);
-    run_command_with_progress(&cmd, Some(duration_seconds), "Compress (fallback)", cancel_flag, progress_cb)
+    run_command_with_progress(&cmd, Some(duration_seconds), "Compress (fallback)", cancel_flag, progress_cb, child_pid)
 }
 
 pub fn encode_chunk(

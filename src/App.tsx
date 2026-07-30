@@ -20,6 +20,7 @@ function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState({ percent: 0, message: 'Ready' });
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
 
   // Editor state
   const [selectedFormat, setSelectedFormat] = useState('mp4');
@@ -72,10 +73,12 @@ function App() {
       }));
       unlisteners.push(await listen('compress-finished', () => {
         setIsProcessing(false);
+        setIsPaused(false);
         setProgress({ percent: 100, message: 'Done!' });
       }));
       unlisteners.push(await listen('batch-finished', () => {
         setIsProcessing(false);
+        setIsPaused(false);
         setProgress({ percent: 100, message: 'Batch done!' });
       }));
     };
@@ -148,9 +151,29 @@ function App() {
     try {
       await tauriInvoke('cancel_processing');
       setIsProcessing(false);
+      setIsPaused(false);
       setProgress({ percent: 0, message: 'Cancelled' });
     } catch (e) {
       console.error('cancel error:', e);
+    }
+  }, []);
+
+  const handlePause = useCallback(async () => {
+    try {
+      await tauriInvoke('pause_processing');
+      setIsPaused(true);
+      setProgress(prev => ({ ...prev, message: 'Paused' }));
+    } catch (e) {
+      console.error('pause error:', e);
+    }
+  }, []);
+
+  const handleResume = useCallback(async () => {
+    try {
+      await tauriInvoke('resume_processing');
+      setIsPaused(false);
+    } catch (e) {
+      console.error('resume error:', e);
     }
   }, []);
 
@@ -298,10 +321,13 @@ function App() {
             setForceVfrFix={setForceVfrFix}
             progress={progress}
             isProcessing={isProcessing}
+            isPaused={isPaused}
             onStartCompress={handleStartCompress}
             onBatchCompress={handleBatchCompress}
             onBatchTest={handleBatchTest}
             onCancel={handleCancel}
+            onPause={handlePause}
+            onResume={handleResume}
             onTrim={handleTrim}
             onNormalize={handleNormalize}
             onExtractFrame={handleExtractFrame}
@@ -309,7 +335,7 @@ function App() {
           />
         </div>
         <div style={{ display: activeTab === 'compare' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
-          <CompareTab addLog={addLog} />
+          <CompareTab addLog={addLog} isActive={activeTab === 'compare'} />
         </div>
         <div style={{ display: activeTab === 'logs' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
           <LogsTab logs={logs} />

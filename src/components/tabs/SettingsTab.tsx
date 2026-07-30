@@ -79,8 +79,8 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
           >
             <option value={1}>Every frame (very slow)</option>
             <option value={2}>Every 2nd frame</option>
-            <option value={5}>Every 5th frame (default)</option>
-            <option value={10}>Every 10th frame (fast)</option>
+            <option value={5}>Every 5th frame</option>
+            <option value={10}>Every 10th frame (default)</option>
             <option value={24}>Every 24th frame (very fast)</option>
           </select>
         </div>

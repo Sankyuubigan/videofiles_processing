@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::settings::{get_actual_ffmpeg_path, get_ffprobe_path};
 
@@ -32,12 +32,29 @@ pub struct RunResult {
     pub message: String,
 }
 
+fn spawn_stderr_drainer(stderr: std::process::ChildStderr) -> std::thread::JoinHandle<Vec<String>> {
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        let mut error_lines = Vec::new();
+        for line_result in reader.lines() {
+            if let Ok(line) = line_result {
+                let lower = line.to_lowercase();
+                if ["error", "failed", "invalid", "cannot", "unable"].iter().any(|k| lower.contains(k)) {
+                    error_lines.push(line.trim().to_string());
+                }
+            }
+        }
+        error_lines
+    })
+}
+
 pub fn run_command_with_progress(
     cmd: &[String],
     duration_seconds: Option<f64>,
     stage_name: &str,
     cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> RunResult {
     log::debug!("Executing FFmpeg command: {}", cmd.join(" "));
     let ffmpeg_path = get_actual_ffmpeg_path();
@@ -60,6 +77,10 @@ pub fn run_command_with_progress(
         }
     };
 
+    if let Some(ref pid_ref) = child_pid {
+        pid_ref.store(child.id(), Ordering::Release);
+    }
+
     let stdout = match child.stdout.take() {
         Some(s) => s,
         None => {
@@ -67,6 +88,9 @@ pub fn run_command_with_progress(
             return RunResult { success: false, message: "Failed to capture FFmpeg stdout".to_string() };
         }
     };
+
+    let stderr_handle = child.stderr.take().map(spawn_stderr_drainer);
+
     let reader = BufReader::new(stdout);
 
     let mut output_log = Vec::new();
@@ -91,6 +115,12 @@ pub fn run_command_with_progress(
                     cb(percent, format!("{}: {}%", stage_name, percent));
                 }
             }
+        }
+    }
+
+    if let Some(handle) = stderr_handle {
+        if let Ok(mut stderr_errors) = handle.join() {
+            error_lines.append(&mut stderr_errors);
         }
     }
 
@@ -137,7 +167,7 @@ pub fn run_command_simple(cmd: &[String], cancel_flag: Arc<AtomicBool>) -> RunRe
         Ok(c) => c,
         Err(e) => {
             log::error!("Failed to start FFmpeg (simple): {}", e);
-            return RunResult { success: false, message: format!("Failed to start FFmpeg: {}", e) };
+            return RunResult { success: false, message: format!("Failed to start FFmpeg (simple): {}", e) };
         }
     };
 
@@ -148,6 +178,9 @@ pub fn run_command_simple(cmd: &[String], cancel_flag: Arc<AtomicBool>) -> RunRe
             return RunResult { success: false, message: "Failed to capture FFmpeg stdout".to_string() };
         }
     };
+
+    let stderr_handle = child.stderr.take().map(spawn_stderr_drainer);
+
     let reader = BufReader::new(stdout);
 
     let mut output_log = Vec::new();
@@ -165,6 +198,12 @@ pub fn run_command_simple(cmd: &[String], cancel_flag: Arc<AtomicBool>) -> RunRe
             if ["error", "failed", "invalid", "cannot", "unable"].iter().any(|k| lower.contains(k)) {
                 error_lines.push(line.trim().to_string());
             }
+        }
+    }
+
+    if let Some(handle) = stderr_handle {
+        if let Ok(mut stderr_errors) = handle.join() {
+            error_lines.append(&mut stderr_errors);
         }
     }
 
@@ -187,7 +226,7 @@ pub fn run_command_simple(cmd: &[String], cancel_flag: Arc<AtomicBool>) -> RunRe
             }
         }
         Err(e) => {
-            log::error!("Failed to wait for FFmpeg (simple): {}", e);
+            log::error!("Failed to wait for FFmpeg: {}", e);
             RunResult { success: false, message: format!("Failed to wait for FFmpeg: {}", e) }
         }
     }

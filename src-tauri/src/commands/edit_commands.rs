@@ -8,13 +8,13 @@ use crate::video_processor::normalize::normalize_audio;
 use crate::video_processor::extract_frame::extract_frame as extract_frame_task;
 
 #[tauri::command]
-pub fn trim_video_cmd(
+pub async fn trim_video_cmd(
     file_path: String,
     seconds: f64,
     from_start: bool,
     output_dir: Option<String>,
     app: AppHandle,
-    proc_state: State<ProcessingState>,
+    proc_state: State<'_, ProcessingState>,
 ) -> Result<String, String> {
     {
         let mut is_proc = proc_state.is_processing.lock().map_err(|e| {
@@ -33,7 +33,7 @@ pub fn trim_video_cmd(
     let file_path_for_log = file_path.clone();
     let cancel = proc_state.cancel_flag.clone();
     let app2 = app.clone();
-    let result = std::thread::spawn(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let progress_cb = {
             let app = app2.clone();
             Arc::new(move |percent: i32, msg: String| {
@@ -41,7 +41,7 @@ pub fn trim_video_cmd(
             }) as Arc<dyn Fn(i32, String) + Send + Sync>
         };
         trim_video(&file_path, seconds, from_start, cancel, Some(progress_cb), output_dir.as_deref())
-    }).join().map_err(|_| {
+    }).await.map_err(|_| {
         let msg = "Trim thread panicked".to_string();
         error!("{}", msg);
         msg
@@ -63,11 +63,11 @@ pub fn trim_video_cmd(
 }
 
 #[tauri::command]
-pub fn normalize_audio_cmd(
+pub async fn normalize_audio_cmd(
     file_path: String,
     output_dir: Option<String>,
     app: AppHandle,
-    proc_state: State<ProcessingState>,
+    proc_state: State<'_, ProcessingState>,
 ) -> Result<String, String> {
     {
         let mut is_proc = proc_state.is_processing.lock().map_err(|e| {
@@ -86,7 +86,7 @@ pub fn normalize_audio_cmd(
     let file_path_for_log = file_path.clone();
     let cancel = proc_state.cancel_flag.clone();
     let app2 = app.clone();
-    let result = std::thread::spawn(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let progress_cb = {
             let app = app2.clone();
             Arc::new(move |percent: i32, msg: String| {
@@ -94,7 +94,7 @@ pub fn normalize_audio_cmd(
             }) as Arc<dyn Fn(i32, String) + Send + Sync>
         };
         normalize_audio(&file_path, cancel, Some(progress_cb), output_dir.as_deref())
-    }).join().map_err(|_| {
+    }).await.map_err(|_| {
         let msg = "Normalize thread panicked".to_string();
         error!("{}", msg);
         msg
@@ -116,11 +116,11 @@ pub fn normalize_audio_cmd(
 }
 
 #[tauri::command]
-pub fn extract_frame_cmd(
+pub async fn extract_frame_cmd(
     file_path: String,
     frame_number: usize,
     output_dir: Option<String>,
-    proc_state: State<ProcessingState>,
+    proc_state: State<'_, ProcessingState>,
 ) -> Result<String, String> {
     {
         let mut is_proc = proc_state.is_processing.lock().map_err(|e| {
@@ -138,9 +138,9 @@ pub fn extract_frame_cmd(
 
     let file_path_for_log = file_path.clone();
     let cancel = proc_state.cancel_flag.clone();
-    let result = std::thread::spawn(move || {
+    let result = tokio::task::spawn_blocking(move || {
         extract_frame_task(&file_path, frame_number, cancel, output_dir.as_deref())
-    }).join().map_err(|_| {
+    }).await.map_err(|_| {
         let msg = "Extract frame thread panicked".to_string();
         error!("{}", msg);
         msg

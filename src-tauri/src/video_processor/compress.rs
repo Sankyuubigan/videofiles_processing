@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use log::{error, warn, info};
 
 use crate::config::COMPRESSED_VIDEO_SUFFIX;
@@ -31,6 +31,7 @@ pub fn compress_video(
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     output_dir: Option<&str>,
     auto_crf: bool, target_vmaf: f64,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> Result<String, String> {
     let input_p = Path::new(input_path);
     let mut actual_crf = crf_value;
@@ -72,7 +73,7 @@ pub fn compress_video(
     if needs_fix {
         let result = fix_vfr_target_crf(
             input_path, &output_str, output_format, codec, actual_crf,
-            preset_value, duration, use_hardware, &video_info, cancel_flag.clone(), progress_cb.clone(),
+            preset_value, duration, use_hardware, &video_info, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
         );
         if !result.success {
             error!("VFR-fix error for {}: {}", input_path, result.message);
@@ -81,20 +82,20 @@ pub fn compress_video(
     } else {
         let result = compress_video_core(
             input_path, &output_str, output_format, codec, actual_crf,
-            preset_value, duration, &video_info, use_hardware, cancel_flag.clone(), progress_cb.clone(),
+            preset_value, duration, &video_info, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
         );
         if !result.success {
             warn!("First compress attempt failed for {}, trying without subtitles", input_path);
             let result2 = compress_video_core_no_subtitles(
                 input_path, &output_str, output_format, codec, actual_crf,
-                preset_value, duration, &video_info, use_hardware, cancel_flag.clone(), progress_cb.clone(),
+                preset_value, duration, &video_info, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
             );
             if !result2.success {
                 warn!("Second compress attempt failed for {}, trying full map", input_path);
                 let final_cb = progress_cb.clone();
                 let result3 = compress_video_core_full_map(
                     input_path, &output_str, output_format, codec, actual_crf,
-                    preset_value, duration, cancel_flag, final_cb,
+                    preset_value, duration, cancel_flag, final_cb, child_pid.clone(),
                 );
                 if !result3.success {
                     error!("All compress attempts failed for {}: {}", input_path, result3.message);

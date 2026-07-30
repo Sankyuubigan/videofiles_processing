@@ -4,7 +4,7 @@ import { Settings } from '../types';
 
 const DEFAULT_SETTINGS: Settings = {
   ffmpeg_path: './',
-  vmaf_subsample: 5,
+  vmaf_subsample: 10,
   chunk_count: 5,
   chunk_duration: 2,
   locale: 'en',

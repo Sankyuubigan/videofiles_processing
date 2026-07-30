@@ -22,7 +22,7 @@ pub fn trim_video_core(
         "-progress".to_string(), "pipe:1".to_string(),
         output_path.to_string(),
     ];
-    run_command_with_progress(&cmd, Some(duration), "Trim", cancel_flag, progress_cb)
+    run_command_with_progress(&cmd, Some(duration), "Trim", cancel_flag, progress_cb, None)
 }
 
 pub fn normalize_audio_volume(
@@ -46,7 +46,7 @@ pub fn normalize_audio_volume(
         "-progress".to_string(), "pipe:1".to_string(),
         output_path.to_string(),
     ];
-    run_command_with_progress(&cmd, Some(duration), "Normalize volume", cancel_flag, progress_cb)
+    run_command_with_progress(&cmd, Some(duration), "Normalize volume", cancel_flag, progress_cb, None)
 }
 
 pub fn extract_frame(

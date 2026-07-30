@@ -22,7 +22,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             ffmpeg_path: "./".to_string(),
-            vmaf_subsample: 5,
+            vmaf_subsample: 10,
             chunk_count: 5,
             chunk_duration: 2,
             locale: "en".to_string(),

@@ -26,6 +26,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'process.batch_test': 'Batch Test',
     'process.batch_compress': 'Batch Compress',
     'process.cancel': 'Cancel',
+    'process.pause': 'Pause',
+    'process.resume': 'Resume',
+    'process.paused': 'Paused',
 
     // Compare
     'compare.select_left': 'Select left video',
@@ -85,6 +88,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'process.batch_test': 'Тест всех',
     'process.batch_compress': 'Сжать все',
     'process.cancel': 'Отмена',
+    'process.pause': 'Пауза',
+    'process.resume': 'Продолжить',
+    'process.paused': 'Приостановлено',
 
     // Compare
     'compare.select_left': 'Выбрать левое видео',

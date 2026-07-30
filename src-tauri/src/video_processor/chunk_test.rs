@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use log::warn;
+use log::{warn, info, error};
 use crate::config::get_codecs;
 use crate::estimator::format_duration;
 use crate::ffmpeg::encode::{calculate_vmaf, encode_chunk};
@@ -73,7 +73,10 @@ pub fn find_best_crf(
                 input_path, &chunk_str, *ts, chunk_duration,
                 codec, mid_crf, preset_value, use_hardware, &video_info, force_vfr_fix, cancel_flag.clone(),
             );
-            if !result.success { break; }
+            if !result.success {
+                warn!("Auto CRF: encode failed for chunk {} at CRF {}: {}", i, mid_crf, result.message);
+                break;
+            }
             let vmaf = calculate_vmaf(
                 input_path, &chunk_str, *ts, chunk_duration,
                 vmaf_subsample, width, &video_info, force_vfr_fix, cancel_flag.clone(),
@@ -81,13 +84,23 @@ pub fn find_best_crf(
             if let Err(e) = std::fs::remove_file(&chunk_path) {
                 warn!("Failed to remove chunk {:?}: {}", chunk_path, e);
             }
-            if vmaf < 0.0 { libvmaf_missing = true; break; }
+            if vmaf < 0.0 {
+                error!("Auto CRF: VMAF failed for chunk {} at CRF {} (score={})", i, mid_crf, vmaf);
+                libvmaf_missing = true;
+                break;
+            }
+            info!("Auto CRF: chunk {} at CRF {} -> VMAF={:.2}", i, mid_crf, vmaf);
             vmaf_scores.push(vmaf);
         }
 
-        if libvmaf_missing || vmaf_scores.is_empty() { break; }
+        if libvmaf_missing || vmaf_scores.is_empty() {
+            warn!("Auto CRF: VMAF returned error at step {}, aborting search", step + 1);
+            break;
+        }
         let avg_vmaf = vmaf_scores.iter().sum::<f64>() / vmaf_scores.len() as f64;
         let diff = (avg_vmaf - target_vmaf).abs();
+
+        info!("Auto CRF: step {}, CRF {}, Avg VMAF={:.2}, Target={}", step + 1, mid_crf, avg_vmaf, target_vmaf);
 
         if avg_vmaf >= (target_vmaf - 0.1) && mid_crf > best_crf_acceptable {
             best_crf_acceptable = mid_crf;
@@ -104,6 +117,7 @@ pub fn find_best_crf(
     }
 
     let final_crf = if best_crf_acceptable != -1 { best_crf_acceptable } else { best_crf_closest };
+    info!("Auto CRF done: selected CRF {} for target VMAF {}", final_crf, target_vmaf);
     if let Some(cb) = progress_cb {
         cb(60, format!("Auto CRF done: CRF {}", final_crf));
     }
@@ -126,7 +140,9 @@ pub fn run_chunk_test(
 ) -> Result<ChunkTestResult, String> {
     let mut actual_crf = crf_value;
     if auto_crf {
+        info!("Chunk Test: Auto CRF enabled, target VMAF={}", target_vmaf);
         actual_crf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, cancel_flag.clone(), None, force_vfr_fix);
+        info!("Chunk Test: Auto CRF selected CRF {}", actual_crf);
     }
 
     let video_info = get_full_video_info(input_path)?;
@@ -176,8 +192,15 @@ pub fn run_chunk_test(
                     input_path, &out_str, *ts, chunk_duration,
                     vmaf_subsample, width, &video_info, force_vfr_fix, cancel_flag.clone(),
                 );
-                if vmaf == -2.0 { libvmaf_missing = true; }
-                else if vmaf >= 0.0 { vmaf_scores.push(vmaf); }
+                if vmaf == -2.0 {
+                    error!("Chunk Test: libvmaf missing, skipping VMAF for remaining chunks");
+                    libvmaf_missing = true;
+                } else if vmaf >= 0.0 {
+                    info!("Chunk Test: chunk {} at CRF {} -> VMAF={:.2}", i, actual_crf, vmaf);
+                    vmaf_scores.push(vmaf);
+                } else {
+                    warn!("Chunk Test: VMAF returned {} for chunk {}", vmaf, i);
+                }
             }
             if let Ok(meta) = std::fs::metadata(&out_path) {
                 total_size_bytes += meta.len();
@@ -213,6 +236,8 @@ pub fn run_chunk_test(
     let avg_vmaf = if vmaf_scores.is_empty() { -1.0 }
     else if libvmaf_missing { -2.0 }
     else { vmaf_scores.iter().sum::<f64>() / vmaf_scores.len() as f64 };
+
+    log::info!("Chunk Test finished for {}: diff={}, est size={}, VMAF={:.1}", input_path, diff_str, format!("{:.1} MB", est_size_mb), avg_vmaf);
 
     Ok(ChunkTestResult {
         file_path: input_path.to_string(),

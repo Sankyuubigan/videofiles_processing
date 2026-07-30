@@ -33,10 +33,13 @@ interface Props {
   setForceVfrFix: (v: boolean) => void;
   progress: { percent: number; message: string };
   isProcessing: boolean;
+  isPaused: boolean;
   onStartCompress: () => void;
   onBatchCompress: () => void;
   onBatchTest: () => void;
   onCancel: () => void;
+  onPause: () => void;
+  onResume: () => void;
   onTrim: (path: string, seconds: number, fromStart: boolean) => void;
   onNormalize: (path: string) => void;
   onExtractFrame: (path: string, frame: number) => void;
@@ -93,11 +96,14 @@ export default function EditorTab(props: Props) {
       <ProcessControl
         progress={props.progress}
         isProcessing={props.isProcessing}
+        isPaused={props.isPaused}
         hasFiles={props.filesCount > 0}
         onStart={props.onStartCompress}
         onBatchTest={props.onBatchTest}
         onBatchCompress={props.onBatchCompress}
         onCancel={props.onCancel}
+        onPause={props.onPause}
+        onResume={props.onResume}
       />
     </div>
   );

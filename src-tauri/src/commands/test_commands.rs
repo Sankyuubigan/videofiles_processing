@@ -8,7 +8,7 @@ use crate::video_processor::chunk_test::run_chunk_test;
 use super::compress_commands::ProcessingState;
 
 #[tauri::command]
-pub fn run_chunk_test_cmd(
+pub async fn run_chunk_test_cmd(
     file_index: usize,
     codec: String,
     crf_value: i32,
@@ -17,8 +17,8 @@ pub fn run_chunk_test_cmd(
     auto_crf: bool,
     target_vmaf: f64,
     force_vfr_fix: bool,
-    queue_state: State<FileQueueState>,
-    proc_state: State<ProcessingState>,
+    queue_state: State<'_, FileQueueState>,
+    proc_state: State<'_, ProcessingState>,
 ) -> Result<TestResult, String> {
     {
         let mut is_proc = proc_state.is_processing.lock().map_err(|e| {
@@ -49,9 +49,9 @@ pub fn run_chunk_test_cmd(
 
     let path_for_log = path.clone();
     let cancel = proc_state.cancel_flag.clone();
-    let result = std::thread::spawn(move || {
+    let result = tokio::task::spawn_blocking(move || {
         run_chunk_test(&path, &codec, crf_value, &preset_value, use_hardware, cancel, auto_crf, target_vmaf, force_vfr_fix)
-    }).join().map_err(|_| {
+    }).await.map_err(|_| {
         let msg = "Chunk test thread panicked".to_string();
         error!("{}", msg);
         msg
@@ -90,7 +90,7 @@ pub fn run_chunk_test_cmd(
 }
 
 #[tauri::command]
-pub fn run_batch_test(
+pub async fn run_batch_test(
     codec: String,
     crf_value: i32,
     preset_value: String,
@@ -99,8 +99,8 @@ pub fn run_batch_test(
     target_vmaf: f64,
     force_vfr_fix: bool,
     app: AppHandle,
-    queue_state: State<FileQueueState>,
-    proc_state: State<ProcessingState>,
+    queue_state: State<'_, FileQueueState>,
+    proc_state: State<'_, ProcessingState>,
 ) -> Result<Vec<TestResult>, String> {
     {
         let mut is_proc = proc_state.is_processing.lock().map_err(|e| {
@@ -116,24 +116,27 @@ pub fn run_batch_test(
     }
     proc_state.cancel_flag.store(false, Ordering::Relaxed);
 
-    let files = queue_state.files.lock().map_err(|e| {
-        let msg = format!("Failed to lock file queue: {}", e);
-        error!("{}", msg);
-        msg
-    })?.clone();
-    let total = files.len();
+    let (files_vec, total) = {
+        let files = queue_state.files.lock().map_err(|e| {
+            let msg = format!("Failed to lock file queue: {}", e);
+            error!("{}", msg);
+            msg
+        })?;
+        let v = files.clone();
+        (v.clone(), v.len())
+    };
     let mut results = Vec::new();
 
-    for (i, file) in files.iter().enumerate() {
+    for (i, file) in files_vec.iter().enumerate() {
         if proc_state.cancel_flag.load(Ordering::Relaxed) { break; }
         let cancel = proc_state.cancel_flag.clone();
         let path = file.path.clone();
         let codec = codec.clone();
         let preset = preset_value.clone();
 
-        let result = std::thread::spawn(move || {
+        let result = tokio::task::spawn_blocking(move || {
             run_chunk_test(&path, &codec, crf_value, &preset, use_hardware, cancel, auto_crf, target_vmaf, force_vfr_fix)
-        }).join().map_err(|_| {
+        }).await.map_err(|_| {
             let msg = format!("Batch test thread panicked for {}", file.path);
             error!("{}", msg);
             msg

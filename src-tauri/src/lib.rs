@@ -6,6 +6,7 @@ mod crf_extractor;
 mod estimator;
 mod commands;
 mod tauri_logger;
+mod process_control;
 
 use log::info;
 use commands::file_commands::FileQueueState;
@@ -14,7 +15,7 @@ use ffmpeg::stream_server::StreamState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri_logger::init(log::LevelFilter::Info).expect("Failed to initialize logger");
+    tauri_logger::init(log::LevelFilter::Debug).expect("Failed to initialize logger");
     info!("Starting VideoFile Pro");
 
     let stream_port = ffmpeg::stream_server::start_stream_server();
@@ -53,6 +54,8 @@ pub fn run() {
             commands::compress_commands::start_compress,
             commands::compress_commands::start_batch_compress,
             commands::compress_commands::cancel_processing,
+            commands::compress_commands::pause_processing,
+            commands::compress_commands::resume_processing,
             commands::test_commands::run_chunk_test_cmd,
             commands::test_commands::run_batch_test,
             commands::edit_commands::trim_video_cmd,

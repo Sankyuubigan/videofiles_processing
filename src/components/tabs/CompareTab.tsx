@@ -12,9 +12,10 @@ const BROWSER_SUPPORTED_CODECS = ['h264', 'vp8', 'vp9', 'av1'];
 
 interface Props {
   addLog: (msg: string) => void;
+  isActive: boolean;
 }
 
-export default function CompareTab({ addLog }: Props) {
+export default function CompareTab({ addLog, isActive }: Props) {
   const [fileA, setFileA] = useState<string | null>(null);
   const [fileB, setFileB] = useState<string | null>(null);
   const [infoA, setInfoA] = useState<VideoInfo | null>(null);
@@ -91,7 +92,7 @@ export default function CompareTab({ addLog }: Props) {
     loadFile(path, targetSide);
   }, [addLog, loadFile]);
 
-  const { isDragOver } = useDragDrop({ onDrop: handleDrop });
+  const { isDragOver } = useDragDrop({ onDrop: handleDrop, enabled: isActive });
 
   const selectFile = useCallback(async (side: 'a' | 'b') => {
     const file = await open({
