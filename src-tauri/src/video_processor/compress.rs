@@ -7,22 +7,37 @@ use crate::config::COMPRESSED_VIDEO_SUFFIX;
 use crate::crf_extractor::get_crf_from_file;
 use crate::estimator::estimate_video_complexity;
 use crate::ffmpeg::encode::{compress_video_core, compress_video_core_no_subtitles, compress_video_core_full_map, fix_vfr_target_crf};
-use crate::ffmpeg::probe::{get_gpu_info, get_video_info_raw, VideoInfo};
+use crate::ffmpeg::probe::{get_video_info_raw, VideoInfo};
 use crate::settings::Settings;
 use crate::video_processor::chunk_test::find_best_crf;
+use crate::video_processor::content_type::detect_content_type;
 use crate::commands::file_commands::TestResult;
 
 pub fn get_full_video_info(input_path: &str) -> Result<VideoInfo, String> {
-    let mut info = get_video_info_raw(input_path)?;
-    let gpu = get_gpu_info();
-    let (complexity_score, complexity_desc) = estimate_video_complexity(&info);
-    let crf_value = get_crf_from_file(input_path);
+    let input_path_owned = input_path.to_string();
+
+    let handle_info = std::thread::spawn({
+        let p = input_path_owned.clone();
+        move || get_video_info_raw(&p)
+    });
+    let handle_crf = std::thread::spawn({
+        let p = input_path_owned.clone();
+        move || get_crf_from_file(&p)
+    });
+
+    let mut info = handle_info.join().map_err(|e| format!("Thread join error: {:?}", e))??;
+    let crf_value = handle_crf.join().map_err(|e| format!("Thread join error: {:?}", e))?;
     info!("CRF for {}: {:?}", input_path, crf_value);
-    info.gpu_info = gpu.clone();
-    info.processing_mode = if gpu.contains("Available GPUs") { "GPU" } else { "CPU" }.to_string();
+
+    let (complexity_score, complexity_desc) = estimate_video_complexity(&info);
+    let video_type = detect_content_type(input_path, info.duration);
+    info!("Content type for {}: {:?}", input_path, video_type);
+
+    info.processing_mode = if info.gpu_info.contains("Available GPUs") { "GPU" } else { "CPU" }.to_string();
     info.complexity_score = complexity_score;
     info.complexity_desc = complexity_desc;
     info.crf_value = crf_value;
+    info.video_type = video_type;
     Ok(info)
 }
 
@@ -73,7 +88,7 @@ pub fn compress_video(
     cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     output_dir: Option<&str>,
-    auto_crf: bool, target_vmaf: f64,
+    auto_crf: bool, target_vmaf: f64, target_ssimulacra2: f64,
     test_result: Option<&TestResult>,
     child_pid: Option<Arc<AtomicU32>>,
 ) -> Result<String, String> {
@@ -99,7 +114,7 @@ pub fn compress_video(
             }
             return Err(reason);
         }
-        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix);
+        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix);
         match acrf.crf {
             Some(crf) => {
                 actual_crf = crf;
@@ -109,7 +124,7 @@ pub fn compress_video(
             }
             None => {
                 let filename = input_p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| input_path.to_string());
-                let msg = format!("SKIP: {} — target VMAF {} unreachable (best achieved: {:.1})", filename, target_vmaf, acrf.best_vmaf);
+                let msg = format!("SKIP: {} — target unreachable (best achieved: {:.1})", filename, acrf.best_vmaf);
                 warn!("{}", msg);
                 if let Some(ref cb) = progress_cb {
                     cb(100, msg.clone());
@@ -122,6 +137,8 @@ pub fn compress_video(
     }
 
     let needs_fix = force_vfr_fix || video_info.needs_vfr_fix;
+    let video_type = &video_info.video_type;
+    info!("Compress: content type={:?}, codec={}, CRF={}", video_type, codec, actual_crf);
     let stem = input_p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let ext = output_format;
     let output_path = if let Some(dir) = output_dir {
@@ -139,7 +156,7 @@ pub fn compress_video(
     if needs_fix {
         let result = fix_vfr_target_crf(
             input_path, &output_str, output_format, codec, actual_crf,
-            preset_value, duration, use_hardware, &video_info, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+            preset_value, duration, use_hardware, &video_info, video_type, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
         );
         if !result.success {
             error!("VFR-fix error for {}: {}", input_path, result.message);
@@ -148,13 +165,13 @@ pub fn compress_video(
     } else {
         let result = compress_video_core(
             input_path, &output_str, output_format, codec, actual_crf,
-            preset_value, duration, &video_info, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+            preset_value, duration, &video_info, video_type, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
         );
         if !result.success {
             warn!("First compress attempt failed for {}, trying without subtitles", input_path);
             let result2 = compress_video_core_no_subtitles(
                 input_path, &output_str, output_format, codec, actual_crf,
-                preset_value, duration, &video_info, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+                preset_value, duration, &video_info, video_type, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
             );
             if !result2.success {
                 warn!("Second compress attempt failed for {}, trying full map", input_path);

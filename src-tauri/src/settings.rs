@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::Mutex;
 use log::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +20,8 @@ pub struct Settings {
     pub skip_min_crf_enabled: bool,
     #[serde(default = "default_min_crf")]
     pub skip_min_crf_value: f64,
+    #[serde(default = "default_false")]
+    pub vmaf_ignore_noise: bool,
 }
 
 fn default_locale() -> String {
@@ -38,11 +40,15 @@ fn default_min_crf() -> f64 {
     18.0
 }
 
+fn default_false() -> bool {
+    false
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             ffmpeg_path: "./".to_string(),
-            vmaf_subsample: 10,
+            vmaf_subsample: 24,
             chunk_count: 5,
             chunk_duration: 2,
             locale: "en".to_string(),
@@ -50,11 +56,12 @@ impl Default for Settings {
             skip_min_diff_percent: 5.0,
             skip_min_crf_enabled: true,
             skip_min_crf_value: 18.0,
+            vmaf_ignore_noise: false,
         }
     }
 }
 
-static SETTINGS_CACHE: OnceLock<Settings> = OnceLock::new();
+static SETTINGS_CACHE: Mutex<Option<Settings>> = Mutex::new(None);
 
 fn settings_file_path() -> PathBuf {
     let exe_dir = match std::env::current_exe() {
@@ -69,8 +76,10 @@ fn settings_file_path() -> PathBuf {
 }
 
 pub fn load_settings() -> Settings {
-    if let Some(cached) = SETTINGS_CACHE.get() {
-        return cached.clone();
+    if let Ok(guard) = SETTINGS_CACHE.lock() {
+        if let Some(ref cached) = *guard {
+            return cached.clone();
+        }
     }
     let path = settings_file_path();
     info!("Loading settings from: {:?}", path);
@@ -93,7 +102,9 @@ pub fn load_settings() -> Settings {
         Settings::default()
     };
     info!("Loaded settings: {:?}", settings);
-    let _ = SETTINGS_CACHE.set(settings.clone());
+    if let Ok(mut guard) = SETTINGS_CACHE.lock() {
+        *guard = Some(settings.clone());
+    }
     settings
 }
 
@@ -102,6 +113,9 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
     info!("Saving settings to {:?}: {:?}", path, settings);
     let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     fs::write(&path, json).map_err(|e| e.to_string())?;
+    if let Ok(mut guard) = SETTINGS_CACHE.lock() {
+        *guard = Some(settings.clone());
+    }
     Ok(())
 }
 

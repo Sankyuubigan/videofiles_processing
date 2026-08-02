@@ -34,6 +34,7 @@ pub async fn start_compress(
     use_hardware: bool,
     auto_crf: bool,
     target_vmaf: f64,
+    target_ssimulacra2: f64,
     app: AppHandle,
     queue_state: State<'_, FileQueueState>,
     proc_state: State<'_, ProcessingState>,
@@ -91,11 +92,11 @@ pub async fn start_compress(
         compress_video(
             &path, &output_format, &codec, crf_value, &preset_value,
             force_vfr_fix, use_hardware, cancel, Some(progress_cb),
-            output_dir.as_deref(), auto_crf, target_vmaf,
+            output_dir.as_deref(), auto_crf, target_vmaf, target_ssimulacra2,
             test_result.as_ref(), Some(child_pid),
         )
-    }).await.map_err(|_| {
-        let msg = "Compress thread panicked".to_string();
+    }).await.map_err(|e| {
+        let msg = format!("Compress thread panicked: {}", e);
         error!("{}", msg);
         msg
     })?;
@@ -125,6 +126,7 @@ pub async fn start_batch_compress(
     use_hardware: bool,
     auto_crf: bool,
     target_vmaf: f64,
+    target_ssimulacra2: f64,
     app: AppHandle,
     queue_state: State<'_, FileQueueState>,
     proc_state: State<'_, ProcessingState>,
@@ -196,11 +198,11 @@ pub async fn start_batch_compress(
             compress_video(
                 &path, &of, &co, crf_value, &pv,
                 force_vfr_fix, use_hardware, cancel, Some(progress_cb),
-                out_dir.as_deref(), auto_crf, target_vmaf,
+                out_dir.as_deref(), auto_crf, target_vmaf, target_ssimulacra2,
                 file_test_result.as_ref(), Some(child_pid),
             )
-        }).await.map_err(|_| {
-            let msg = "Batch compress thread panicked".to_string();
+        }).await.map_err(|e| {
+            let msg = format!("Batch compress thread panicked: {}", e);
             error!("{}", msg);
             msg
         })?;

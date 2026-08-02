@@ -7,8 +7,10 @@ mod estimator;
 mod commands;
 mod tauri_logger;
 mod process_control;
+mod nn_quality;
+mod quality_metrics;
 
-use log::info;
+use log::{info, warn};
 use commands::file_commands::FileQueueState;
 use commands::compress_commands::ProcessingState;
 use ffmpeg::stream_server::StreamState;
@@ -31,6 +33,11 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri_logger::set_app_handle(handle.clone());
             info!("Application started");
+
+            // Initialize ORT for neural network quality metrics
+            if let Err(e) = crate::nn_quality::session::init_ort() {
+                warn!("Failed to initialize ORT (neural network metrics unavailable): {}", e);
+            }
 
             // Auto-download mediainfo if not present (needed for CRF detection)
             tauri::async_runtime::spawn(async move {
@@ -69,6 +76,8 @@ pub fn run() {
             commands::info_commands::get_video_details,
             commands::info_commands::get_gpu_info_cmd,
             commands::compare_commands::get_stream_url,
+            commands::test_commands::run_nn_quality_test_cmd,
+            commands::test_commands::run_all_metrics_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

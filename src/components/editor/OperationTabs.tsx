@@ -20,6 +20,8 @@ interface Props {
   setAutoCrf: (v: boolean) => void;
   targetVmaf: number;
   setTargetVmaf: (v: number) => void;
+  targetSsimulacra2: number;
+  setTargetSsimulacra2: (v: number) => void;
   forceVfrFix: boolean;
   setForceVfrFix: (v: boolean) => void;
   selectedFile: FileEntry | null;
@@ -105,6 +107,15 @@ export default function OperationTabs(props: Props) {
                   step={0.5}
                   value={props.targetVmaf}
                   onChange={(e) => props.setTargetVmaf(parseFloat(e.target.value))}
+                />
+                <label style={{ marginLeft: 12 }}>SSIMULACRA2:</label>
+                <input
+                  type="number"
+                  min={60}
+                  max={100}
+                  step={0.5}
+                  value={props.targetSsimulacra2}
+                  onChange={(e) => props.setTargetSsimulacra2(parseFloat(e.target.value))}
                 />
               </div>
             )}

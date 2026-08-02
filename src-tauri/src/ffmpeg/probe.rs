@@ -4,6 +4,23 @@ use std::path::Path;
 use super::core::run_ffprobe_json;
 use crate::settings::get_actual_ffmpeg_path;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum VideoType {
+    Animation,
+    LiveAction,
+    Mixed,
+}
+
+impl std::fmt::Display for VideoType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VideoType::Animation => write!(f, "Animation"),
+            VideoType::LiveAction => write!(f, "LiveAction"),
+            VideoType::Mixed => write!(f, "Mixed"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioTrack {
     pub index: usize,
@@ -37,6 +54,7 @@ pub struct VideoInfo {
     pub complexity_score: i32,
     pub complexity_desc: String,
     pub crf_value: Option<f64>,
+    pub video_type: VideoType,
 }
 
 #[derive(Deserialize)]
@@ -245,5 +263,6 @@ pub fn get_video_info_raw(input_path: &str) -> Result<VideoInfo, String> {
         complexity_score: 0,
         complexity_desc: String::new(),
         crf_value: None,
+        video_type: VideoType::LiveAction,
     })
 }

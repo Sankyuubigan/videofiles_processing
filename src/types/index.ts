@@ -29,12 +29,14 @@ export interface VideoInfo {
   complexity_score: number;
   complexity_desc: string;
   crf_value: number | null;
+  video_type: 'Animation' | 'LiveAction' | 'Mixed';
 }
 
 export interface FileEntry {
   path: string;
   info: VideoInfo | null;
   test_result: TestResult | null;
+  nn_test_result: NnTestResult | null;
 }
 
 export interface TestResult {
@@ -43,6 +45,16 @@ export interface TestResult {
   test_est_time: string;
   test_vmaf: number;
   is_profitable: boolean;
+  test_crf: number;
+  metric: string;
+}
+
+export interface NnTestResult {
+  score: number;
+  metric: string;
+  inference_ms: number;
+  target: number;
+  passed: boolean;
 }
 
 export interface Settings {
@@ -55,6 +67,7 @@ export interface Settings {
   skip_min_diff_percent: number;
   skip_min_crf_enabled: boolean;
   skip_min_crf_value: number;
+  vmaf_ignore_noise: boolean;
 }
 
 export type Locale = 'en' | 'ru';

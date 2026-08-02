@@ -18,6 +18,14 @@ const translations: Record<Locale, Record<string, string>> = {
     'editor.in_queue': 'In queue: {count} files',
     'editor.drop_hint': 'Drag and drop files here or click "Select file(s)"',
 
+    // Table
+    'table.auto_test': 'Auto-test',
+    'table.test_vmaf': 'Test VMAF',
+    'table.test_ssim': 'Test SSIM',
+    'table.test_lpips': 'LPIPS',
+    'table.test_dists': 'DISTS',
+    'table.test_all': 'Test All',
+
     // Operation tabs
     'op.compress': 'Compress',
     'op.trim': 'Trim',
@@ -64,9 +72,12 @@ const translations: Record<Locale, Record<string, string>> = {
     'settings.auto_skip': 'Auto Mode Skip',
     'settings.skip_min_diff': 'Min size reduction:',
     'settings.skip_min_crf': 'Skip if original CRF >=',
+    'settings.vmaf_ignore_noise': 'Ignore Noise/Grain in VMAF',
 
     // Logs
     'logs.no_logs': 'No logs yet...',
+    'logs.copy': 'Copy',
+    'logs.copied': 'Copied!',
   },
   ru: {
     // Tabs
@@ -84,6 +95,14 @@ const translations: Record<Locale, Record<string, string>> = {
     'editor.clear_table': 'Очистить таблицу',
     'editor.in_queue': 'В очереди: {count} файлов',
     'editor.drop_hint': 'Перетащите файлы сюда или нажмите "Выбрать файл(ы)"',
+
+    // Table
+    'table.auto_test': 'Автотест',
+    'table.test_vmaf': 'Тест VMAF',
+    'table.test_ssim': 'Тест SSIM',
+    'table.test_lpips': 'LPIPS',
+    'table.test_dists': 'DISTS',
+    'table.test_all': 'Тест Всё',
 
     // Operation tabs
     'op.compress': 'Сжатие',
@@ -131,9 +150,12 @@ const translations: Record<Locale, Record<string, string>> = {
     'settings.auto_skip': 'Пропуск в авторежиме',
     'settings.skip_min_diff': 'Мин. уменьшение размера:',
     'settings.skip_min_crf': 'Пропускать если CRF оригинала >=',
+    'settings.vmaf_ignore_noise': 'Игнорировать шум/зерно в VMAF',
 
     // Logs
     'logs.no_logs': 'Пока нет логов...',
+    'logs.copy': 'Копировать',
+    'logs.copied': 'Скопировано!',
   },
 };
 

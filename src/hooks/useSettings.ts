@@ -4,7 +4,7 @@ import { Settings } from '../types';
 
 const DEFAULT_SETTINGS: Settings = {
   ffmpeg_path: './',
-  vmaf_subsample: 10,
+  vmaf_subsample: 24,
   chunk_count: 5,
   chunk_duration: 2,
   locale: 'en',
@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS: Settings = {
   skip_min_diff_percent: 5.0,
   skip_min_crf_enabled: true,
   skip_min_crf_value: 18.0,
+  vmaf_ignore_noise: false,
 };
 
 export function useSettings() {

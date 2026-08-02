@@ -103,12 +103,24 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
             value={localSettings.chunk_duration}
             onChange={(e) => autoSave({ ...localSettings, chunk_duration: parseInt(e.target.value) })}
           >
+            <option value={1}>1 second</option>
             <option value={2}>2 seconds</option>
             <option value={5}>5 seconds</option>
             <option value={10}>10 seconds</option>
             <option value={15}>15 seconds</option>
             <option value={20}>20 seconds</option>
           </select>
+        </div>
+        <div className="settings-row">
+          <div className="checkbox-row">
+            <input
+              type="checkbox"
+              id="vmafIgnoreNoise"
+              checked={localSettings.vmaf_ignore_noise}
+              onChange={(e) => autoSave({ ...localSettings, vmaf_ignore_noise: e.target.checked })}
+            />
+            <label htmlFor="vmafIgnoreNoise">{t('settings.vmaf_ignore_noise')}</label>
+          </div>
         </div>
       </div>
 

@@ -12,7 +12,9 @@ interface Props {
   onSelectFiles: () => void;
   onSelectOutputDir: () => void;
   onRemoveFile: (i: number) => void;
-  onTestFile: (i: number) => void;
+  onTestFile: (i: number, forceMetric?: string) => void;
+  onNnTestFile: (i: number, metric: string) => void;
+  onAllMetricsFile: (i: number) => void;
   operationTab: OperationTab;
   setOperationTab: (t: OperationTab) => void;
   selectedFormat: string;
@@ -29,6 +31,8 @@ interface Props {
   setAutoCrf: (v: boolean) => void;
   targetVmaf: number;
   setTargetVmaf: (v: number) => void;
+  targetSsimulacra2: number;
+  setTargetSsimulacra2: (v: number) => void;
   forceVfrFix: boolean;
   setForceVfrFix: (v: boolean) => void;
   progress: { percent: number; message: string };
@@ -78,6 +82,8 @@ export default function EditorTab(props: Props) {
             onSelect={props.setSelectedIndex}
             onRemove={props.onRemoveFile}
             onTest={props.onTestFile}
+            onNnTest={props.onNnTestFile}
+            onAllMetrics={props.onAllMetricsFile}
           />
         </div>
       </div>
@@ -98,6 +104,8 @@ export default function EditorTab(props: Props) {
         setAutoCrf={props.setAutoCrf}
         targetVmaf={props.targetVmaf}
         setTargetVmaf={props.setTargetVmaf}
+        targetSsimulacra2={props.targetSsimulacra2}
+        setTargetSsimulacra2={props.setTargetSsimulacra2}
         forceVfrFix={props.forceVfrFix}
         setForceVfrFix={props.setForceVfrFix}
         selectedFile={props.files[props.selectedIndex] || null}

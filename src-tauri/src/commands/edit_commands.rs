@@ -41,8 +41,8 @@ pub async fn trim_video_cmd(
             }) as Arc<dyn Fn(i32, String) + Send + Sync>
         };
         trim_video(&file_path, seconds, from_start, cancel, Some(progress_cb), output_dir.as_deref())
-    }).await.map_err(|_| {
-        let msg = "Trim thread panicked".to_string();
+    }).await.map_err(|e| {
+        let msg = format!("Trim thread panicked: {}", e);
         error!("{}", msg);
         msg
     })?;
@@ -94,8 +94,8 @@ pub async fn normalize_audio_cmd(
             }) as Arc<dyn Fn(i32, String) + Send + Sync>
         };
         normalize_audio(&file_path, cancel, Some(progress_cb), output_dir.as_deref())
-    }).await.map_err(|_| {
-        let msg = "Normalize thread panicked".to_string();
+    }).await.map_err(|e| {
+        let msg = format!("Normalize thread panicked: {}", e);
         error!("{}", msg);
         msg
     })?;
@@ -140,8 +140,8 @@ pub async fn extract_frame_cmd(
     let cancel = proc_state.cancel_flag.clone();
     let result = tokio::task::spawn_blocking(move || {
         extract_frame_task(&file_path, frame_number, cancel, output_dir.as_deref())
-    }).await.map_err(|_| {
-        let msg = "Extract frame thread panicked".to_string();
+    }).await.map_err(|e| {
+        let msg = format!("Extract frame thread panicked: {}", e);
         error!("{}", msg);
         msg
     })?;

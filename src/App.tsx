@@ -30,6 +30,7 @@ function App() {
   const [crfValue, setCrfValue] = useState(22);
   const [autoCrf, setAutoCrf] = useState(true);
   const [targetVmaf, setTargetVmaf] = useState(90.0);
+  const [targetSsimulacra2, setTargetSsimulacra2] = useState(71.0);
   const [forceVfrFix, setForceVfrFix] = useState(false);
   const [operationTab, setOperationTab] = useState<OperationTab>('compress');
 
@@ -133,12 +134,13 @@ function App() {
         useHardware,
         autoCrf,
         targetVmaf,
+        targetSsimulacra2,
       });
     } catch (e: any) {
       addLog(`Error: ${e}`);
       setIsProcessing(false);
     }
-  }, [selectedIndex, files.length, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, addLog]);
+  }, [selectedIndex, files.length, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, targetSsimulacra2, addLog]);
 
   const handleBatchCompress = useCallback(async () => {
     if (files.length === 0) return;
@@ -154,12 +156,13 @@ function App() {
         useHardware,
         autoCrf,
         targetVmaf,
+        targetSsimulacra2,
       });
     } catch (e: any) {
       addLog(`Batch error: ${e}`);
       setIsProcessing(false);
     }
-  }, [files.length, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, addLog]);
+  }, [files.length, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, targetSsimulacra2, addLog]);
 
   const handleCancel = useCallback(async () => {
     try {
@@ -191,7 +194,7 @@ function App() {
     }
   }, []);
 
-  const handleTestFile = useCallback(async (index: number) => {
+  const handleTestFile = useCallback(async (index: number, forceMetric?: string) => {
     if (index < 0 || index >= files.length) return;
     setIsProcessing(true);
     try {
@@ -201,16 +204,59 @@ function App() {
         crfValue,
         presetValue: selectedPreset,
         useHardware,
-        autoCrf,
+        autoCrf: forceMetric ? false : autoCrf,
         targetVmaf,
+        targetSsimulacra2,
         forceVfrFix,
+        forceMetric: forceMetric || null,
       });
       setFiles(prev => prev.map((f, i) => i === index ? { ...f, test_result: result } : f));
     } catch (e: any) {
       addLog(`Test error: ${e}`);
     }
     setIsProcessing(false);
-  }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, forceVfrFix, addLog, setFiles]);
+  }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, targetSsimulacra2, forceVfrFix, addLog, setFiles]);
+
+  const handleNnTestFile = useCallback(async (index: number, metric: string) => {
+    if (index < 0 || index >= files.length) return;
+    setIsProcessing(true);
+    try {
+      const result = await tauriInvoke<any>('run_nn_quality_test_cmd', {
+        fileIndex: index,
+        codec: selectedCodec,
+        crfValue,
+        presetValue: selectedPreset,
+        useHardware,
+        forceVfrFix,
+        metric,
+      });
+      setFiles(prev => prev.map((f, i) => i === index ? { ...f, nn_test_result: result } : f));
+      addLog(`NN test (${metric}): score=${result.score.toFixed(4)}, passed=${result.passed}, ${result.inference_ms}ms`);
+    } catch (e: any) {
+      addLog(`NN test error (${metric}): ${e}`);
+    }
+    setIsProcessing(false);
+  }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, forceVfrFix, addLog, setFiles]);
+
+  const handleAllMetricsFile = useCallback(async (index: number) => {
+    if (index < 0 || index >= files.length) return;
+    setIsProcessing(true);
+    try {
+      const result = await tauriInvoke<any>('run_all_metrics_cmd', {
+        fileIndex: index,
+        codec: selectedCodec,
+        crfValue,
+        presetValue: selectedPreset,
+        useHardware,
+        forceVfrFix,
+      });
+      setFiles(prev => prev.map((f, i) => i === index ? { ...f, nn_test_result: result } : f));
+      addLog(`All metrics: primary=${result.metric} score=${result.score.toFixed(4)}, passed=${result.passed}`);
+    } catch (e: any) {
+      addLog(`All metrics error: ${e}`);
+    }
+    setIsProcessing(false);
+  }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, forceVfrFix, addLog, setFiles]);
 
   const handleBatchTest = useCallback(async () => {
     if (files.length === 0) return;
@@ -223,13 +269,14 @@ function App() {
         useHardware,
         autoCrf,
         targetVmaf,
+        targetSsimulacra2,
         forceVfrFix,
       });
     } catch (e: any) {
       addLog(`Batch test error: ${e}`);
     }
     setIsProcessing(false);
-  }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, forceVfrFix, addLog]);
+  }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, targetSsimulacra2, forceVfrFix, addLog]);
 
   const handleTrim = useCallback(async (filePath: string, seconds: number, fromStart: boolean) => {
     setIsProcessing(true);
@@ -315,6 +362,8 @@ function App() {
             onSelectOutputDir={handleSelectOutputDir}
             onRemoveFile={removeFile}
             onTestFile={handleTestFile}
+            onNnTestFile={handleNnTestFile}
+            onAllMetricsFile={handleAllMetricsFile}
             operationTab={operationTab}
             setOperationTab={setOperationTab}
             selectedFormat={selectedFormat}
@@ -331,6 +380,8 @@ function App() {
             setAutoCrf={setAutoCrf}
             targetVmaf={targetVmaf}
             setTargetVmaf={setTargetVmaf}
+            targetSsimulacra2={targetSsimulacra2}
+            setTargetSsimulacra2={setTargetSsimulacra2}
             forceVfrFix={forceVfrFix}
             setForceVfrFix={setForceVfrFix}
             progress={progress}
