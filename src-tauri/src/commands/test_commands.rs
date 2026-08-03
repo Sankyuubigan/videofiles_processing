@@ -10,7 +10,7 @@ use super::compress_commands::ProcessingState;
 
 #[tauri::command]
 pub async fn run_chunk_test_cmd(
-    file_index: usize,
+    path: String,
     codec: String,
     crf_value: i32,
     preset_value: String,
@@ -44,8 +44,8 @@ pub async fn run_chunk_test_cmd(
             error!("{}", msg);
             msg
         })?;
-        files.get(file_index).ok_or_else(|| {
-            let msg = format!("Invalid file index: {}", file_index);
+        files.iter().find(|e| e.path == path).ok_or_else(|| {
+            let msg = format!("File not found in queue: {}", path);
             error!("{}", msg);
             msg
         })?.path.clone()
@@ -88,7 +88,7 @@ pub async fn run_chunk_test_cmd(
                 metric: r.metric,
             };
             if let Ok(mut files) = queue_state.files.lock() {
-                if let Some(entry) = files.get_mut(file_index) {
+                if let Some(entry) = files.iter_mut().find(|e| e.path == path_for_log) {
                     entry.test_result = Some(test_result.clone());
                 }
             }

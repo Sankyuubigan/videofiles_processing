@@ -30,11 +30,11 @@ function App() {
   const [crfValue, setCrfValue] = useState(22);
   const [autoCrf, setAutoCrf] = useState(true);
   const [targetVmaf, setTargetVmaf] = useState(90.0);
-  const [targetSsimulacra2, setTargetSsimulacra2] = useState(70.0);
+  const [targetSsimulacra2, setTargetSsimulacra2] = useState(72.0);
   const [forceVfrFix, setForceVfrFix] = useState(false);
   const [operationTab, setOperationTab] = useState<OperationTab>('compress');
 
-  const { files, setFiles, selectedIndex, setSelectedIndex, addFiles, removeFile, clearQueue } = useFileQueue();
+  const { files, setFiles, selectedIndex, setSelectedIndex, addFiles, removeFile, refreshFiles, clearQueue } = useFileQueue();
   const { settings, ffmpegExists, saveSettings, checkFfmpeg, downloadFfmpeg } = useSettings();
   const [outputDir, setOutputDir] = useState<string | null>(null);
 
@@ -89,6 +89,7 @@ function App() {
         setIsProcessing(false);
         setIsPaused(false);
         setProgress({ percent: 100, message: 'Batch done!' });
+        refreshFiles();
       }));
       unlisteners.push(await listen<[number, string]>('test-progress', (e) => {
         setProgress({ percent: e.payload[0], message: e.payload[1] });
@@ -101,7 +102,7 @@ function App() {
       unlisteners.push(await listen('batch-test-finished', () => {
         setProgress({ percent: 100, message: 'Batch test done!' });
       }));
-      unlisteners.push(await listen<{ index: number; path: string; success: boolean }>('batch-file-done', (e) => {
+      unlisteners.push(await listen<{ path: string; success: boolean }>('file-done', (e) => {
         if (e.payload.success) {
           setFiles(prev => prev.filter(f => f.path !== e.payload.path));
         }
@@ -132,11 +133,13 @@ function App() {
 
   const handleStartCompress = useCallback(async () => {
     if (selectedIndex < 0 || selectedIndex >= files.length) return;
+    const file = files[selectedIndex];
+    if (!file) return;
     setIsProcessing(true);
     setProgress({ percent: 0, message: 'Starting...' });
     try {
       await tauriInvoke('start_compress', {
-        fileIndex: selectedIndex,
+        path: file.path,
         outputFormat: selectedFormat,
         codec: selectedCodec,
         crfValue,
@@ -151,7 +154,7 @@ function App() {
       addLog(`Error: ${e}`);
       setIsProcessing(false);
     }
-  }, [selectedIndex, files.length, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, targetSsimulacra2, addLog]);
+  }, [selectedIndex, files, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, targetSsimulacra2, addLog]);
 
   const handleBatchCompress = useCallback(async () => {
     if (files.length === 0) return;
@@ -205,12 +208,14 @@ function App() {
     }
   }, []);
 
-  const handleTestFile = useCallback(async (index: number, forceMetric?: string) => {
-    if (index < 0 || index >= files.length) return;
+  const handleTestFile = useCallback(async (path: string, forceMetric?: string) => {
+    if (!path) return;
+    const fileIndex = files.findIndex(f => f.path === path);
+    if (fileIndex < 0) return;
     setIsProcessing(true);
     try {
       const result = await tauriInvoke<any>('run_chunk_test_cmd', {
-        fileIndex: index,
+        path,
         codec: selectedCodec,
         crfValue,
         presetValue: selectedPreset,
@@ -221,14 +226,14 @@ function App() {
         forceVfrFix,
         forceMetric: forceMetric || null,
       });
-      setFiles(prev => prev.map((f, i) => i === index ? { ...f, test_result: result } : f));
+      setFiles(prev => prev.map((f) => f.path === path ? { ...f, test_result: result } : f));
       setProgress({ percent: 100, message: 'Done!' });
     } catch (e: any) {
       addLog(`Test error: ${e}`);
       setProgress({ percent: 0, message: 'Error' });
     }
     setIsProcessing(false);
-  }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, targetSsimulacra2, forceVfrFix, addLog, setFiles]);
+  }, [files, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, targetSsimulacra2, forceVfrFix, addLog, setFiles]);
 
   const handleBatchTest = useCallback(async () => {
     if (files.length === 0) return;
@@ -252,14 +257,13 @@ function App() {
     setIsProcessing(false);
   }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, targetSsimulacra2, forceVfrFix, addLog]);
 
-  const handleVideoTypeChange = useCallback(async (index: number, videoType: string) => {
-    if (index < 0 || index >= files.length) return;
-    const file = files[index];
-    if (!file.info) return;
+  const handleVideoTypeChange = useCallback(async (path: string, videoType: string) => {
+    const file = files.find(f => f.path === path);
+    if (!file) return;
     try {
       await tauriInvoke('set_video_type', { path: file.path, videoType });
-      setFiles(prev => prev.map((f, i) =>
-        i === index && f.info ? { ...f, info: { ...f.info, video_type: videoType as any } } : f
+      setFiles(prev => prev.map((f) =>
+        f.path === path && f.info ? { ...f, info: { ...f.info, video_type: videoType as any } } : f
       ));
       addLog(`Video type set to ${videoType} for ${file.path}`);
     } catch (e: any) {

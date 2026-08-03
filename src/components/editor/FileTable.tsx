@@ -6,9 +6,9 @@ interface Props {
   files: FileEntry[];
   selectedIndex: number;
   onSelect: (i: number) => void;
-  onRemove: (i: number) => void;
-  onTest: (i: number, forceMetric?: string) => void;
-  onVideoTypeChange: (i: number, videoType: string) => void;
+  onRemove: (path: string) => void;
+  onTest: (path: string, forceMetric?: string) => void;
+  onVideoTypeChange: (path: string, videoType: string) => void;
 }
 
 function getVmafClass(vmaf: number | null): string {
@@ -111,7 +111,7 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
                     className="video-type-select"
                     value={file.info.video_type}
                     onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => { e.stopPropagation(); onVideoTypeChange(i, e.target.value); }}
+                    onChange={(e) => { e.stopPropagation(); onVideoTypeChange(file.path, e.target.value); }}
                   >
                     <option value="Animation">Animation</option>
                     <option value="LiveAction">LiveAction</option>
@@ -128,10 +128,10 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
               <td>{estTime}</td>
               <td>
                 <div className="action-btn-group">
-                  <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(i); }}>{t('table.auto_test')}</button>
-                  <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(i, 'VMAF'); }}>{t('table.test_vmaf')}</button>
-                  <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(i, 'SSIMULACRA2'); }}>{t('table.test_ssim')}</button>
-                  <button className="action-btn delete" onClick={(e) => { e.stopPropagation(); onRemove(i); }}>x</button>
+                  <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(file.path); }}>{t('table.auto_test')}</button>
+                  <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(file.path, 'VMAF'); }}>{t('table.test_vmaf')}</button>
+                  <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(file.path, 'SSIMULACRA2'); }}>{t('table.test_ssim')}</button>
+                  <button className="action-btn delete" onClick={(e) => { e.stopPropagation(); onRemove(file.path); }}>x</button>
                 </div>
               </td>
             </tr>

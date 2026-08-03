@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
 use tauri::State;
-use log::{info, error};
+use log::{info, error, warn};
 
 use crate::video_processor::compress::get_full_video_info;
 use crate::ffmpeg::probe::VideoInfo;
@@ -84,14 +84,18 @@ pub async fn add_files(paths: Vec<String>, state: tauri::State<'_, FileQueueStat
 }
 
 #[tauri::command]
-pub fn remove_file(index: usize, state: State<FileQueueState>) -> Result<(), String> {
-    info!("remove_file called for index {}", index);
+pub fn remove_file(path: String, state: State<FileQueueState>) -> Result<(), String> {
+    info!("remove_file called for path {}", path);
     let mut files = state.files.lock().map_err(|e| {
         let msg = format!("Failed to lock file queue: {}", e);
         error!("{}", msg);
         msg
     })?;
-    if index < files.len() { files.remove(index); }
+    let before = files.len();
+    files.retain(|e| e.path != path);
+    if files.len() == before {
+        warn!("remove_file: path not found in queue: {}", path);
+    }
     Ok(())
 }
 

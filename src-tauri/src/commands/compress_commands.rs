@@ -25,7 +25,7 @@ impl Default for ProcessingState {
 
 #[tauri::command]
 pub async fn start_compress(
-    file_index: usize,
+    path: String,
     output_format: String,
     codec: String,
     crf_value: i32,
@@ -61,8 +61,8 @@ pub async fn start_compress(
             error!("{}", msg);
             msg
         })?;
-        let file = files.get(file_index).ok_or_else(|| {
-            let msg = format!("Invalid file index: {}", file_index);
+        let file = files.iter().find(|e| e.path == path).ok_or_else(|| {
+            let msg = format!("File not found in queue: {}", path);
             error!("{}", msg);
             msg
         })?;
@@ -111,6 +111,20 @@ pub async fn start_compress(
     }
     if let Err(ref e) = result {
         error!("Compress failed for {}: {}", path_for_log, e);
+    }
+    let success = result.is_ok();
+    let _ = app.emit("file-done", serde_json::json!({
+        "path": path_for_log,
+        "success": success
+    }));
+    if success {
+        if let Ok(mut files) = queue_state.files.lock() {
+            let before = files.len();
+            files.retain(|e| e.path != path_for_log);
+            if files.len() == before {
+                warn!("Compress: file not found in queue for removal: {}", path_for_log);
+            }
+        }
     }
     let _ = app.emit("compress-finished", result.clone());
     result
@@ -213,11 +227,19 @@ pub async fn start_batch_compress(
             error!("Batch compress failed for {}: {}", path_for_log, e);
         }
         let success = result.is_ok();
-        let _ = app.emit("batch-file-done", serde_json::json!({
-            "index": i,
+        let _ = app.emit("file-done", serde_json::json!({
             "path": path_for_log,
             "success": success
         }));
+        if success {
+            if let Ok(mut files) = queue_state.files.lock() {
+                let before = files.len();
+                files.retain(|e| e.path != path_for_log);
+                if files.len() == before {
+                    warn!("Batch compress: file not found in queue for removal: {}", path_for_log);
+                }
+            }
+        }
         results.push(result);
     }
 

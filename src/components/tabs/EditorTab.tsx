@@ -11,9 +11,9 @@ interface Props {
   isDragOver: boolean;
   onSelectFiles: () => void;
   onSelectOutputDir: () => void;
-  onRemoveFile: (i: number) => void;
-  onTestFile: (i: number, forceMetric?: string) => void;
-  onVideoTypeChange: (i: number, videoType: string) => void;
+  onRemoveFile: (path: string) => void;
+  onTestFile: (path: string, forceMetric?: string) => void;
+  onVideoTypeChange: (path: string, videoType: string) => void;
   operationTab: OperationTab;
   setOperationTab: (t: OperationTab) => void;
   selectedFormat: string;

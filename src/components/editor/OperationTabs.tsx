@@ -95,7 +95,7 @@ export default function OperationTabs(props: Props) {
           <div className="op-row">
             <div className="checkbox-row">
               <input type="checkbox" id="autoCrf" checked={props.autoCrf} onChange={(e) => props.setAutoCrf(e.target.checked)} />
-              <label htmlFor="autoCrf">Auto CRF (VMAF target)</label>
+              <label htmlFor="autoCrf">{t('op.auto_crf')}</label>
             </div>
             {props.autoCrf && (
               <div className="vmaf-input">

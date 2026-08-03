@@ -27,6 +27,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'op.compress': 'Compress',
     'op.trim': 'Trim',
     'op.normalize': 'Normalize',
+    'op.auto_crf': 'Auto CRF (SSIMULACRA2/VMAF target)',
 
     // Process control
     'process.start': 'Start Compress',
@@ -50,6 +51,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'compare.right_video': 'Right video (drop here)',
     'compare.play': 'Play',
     'compare.pause': 'Pause',
+    'compare.volume': 'Volume',
 
     // Settings
     'settings.ffmpeg': 'FFmpeg',
@@ -94,7 +96,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'help.auto_title': 'Auto Mode (Auto CRF)',
     'help.auto_desc': 'When Auto CRF is enabled, the program automatically selects the best CRF value for each file to reach the target quality score.',
     'help.auto_how': 'How it works:',
-    'help.auto_how_1': 'The program runs test encodes at different CRF values to find the highest CRF that still achieves the target score (SSIMULACRA2 70 for Animation/Rendered, VMAF 90 for LiveAction).',
+    'help.auto_how_1': 'The program runs test encodes at different CRF values to find the highest CRF that still achieves the target score (SSIMULACRA2 72 for Animation/Rendered, VMAF 90 for LiveAction).',
     'help.auto_how_2': 'A higher CRF means more compression and smaller file size. Auto mode finds the most aggressive setting that keeps quality above your target.',
     'help.auto_how_3': 'If the target score is unreachable even at the maximum CRF for the codec, the file is skipped with a message like "target unreachable (best achieved: X.X)".',
     'help.skip_title': 'Auto Mode Skip Rules',
@@ -102,6 +104,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'help.skip_min_size': 'Min size reduction — skips a file if the estimated size reduction is less than this percentage (default 5%). If compressing won\'t save much space, there\'s no point.',
     'help.skip_crf_ge': 'Skip if original CRF >= — skips a file if its original CRF is already at or above this value (default 18). Such videos are already well compressed and further compression would only waste time and reduce quality.',
     'help.skip_reported': 'Skipped files are reported in the progress bar with a "SKIP" message explaining the reason.',
+    'help.support_title': 'Support the Project',
+    'help.support_desc': 'This project is developed by a single author. If the app is useful to you, you can thank the author and support the project:',
+    'help.support_link': 'Thank the author. Support the project →',
   },
   ru: {
     // Tabs
@@ -129,6 +134,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'op.compress': 'Сжатие',
     'op.trim': 'Обрезка',
     'op.normalize': 'Нормализация',
+    'op.auto_crf': 'Авто CRF (автоподбор по SSIMULACRA2/VMAF)',
 
     // Process control
     'process.start': 'Начать сжатие',
@@ -152,6 +158,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'compare.right_video': 'Правое видео (перетащите сюда)',
     'compare.play': 'Воспроизвести',
     'compare.pause': 'Пауза',
+    'compare.volume': 'Громкость',
 
     // Settings
     'settings.ffmpeg': 'FFmpeg',
@@ -196,7 +203,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'help.auto_title': 'Авторежим (Авто CRF)',
     'help.auto_desc': 'Когда включён авторежим CRF, программа сама подбирает лучшее значение CRF для каждого файла, чтобы достичь целевой оценки качества.',
     'help.auto_how': 'Как это работает:',
-    'help.auto_how_1': 'Программа выполняет тестовые кодирования с разными значениями CRF, чтобы найти максимальный CRF, при котором целевая оценка ещё достигается (SSIMULACRA2 70 для анимации и рендер-контента, VMAF 90 для живого видео).',
+    'help.auto_how_1': 'Программа выполняет тестовые кодирования с разными значениями CRF, чтобы найти максимальный CRF, при котором целевая оценка ещё достигается (SSIMULACRA2 72 для анимации и рендер-контента, VMAF 90 для живого видео).',
     'help.auto_how_2': 'Чем выше CRF, тем сильнее сжатие и меньше размер файла. Авторежим находит самую агрессивную настройку, при которой качество остаётся выше вашей цели.',
     'help.auto_how_3': 'Если целевая оценка недостижима даже при максимальном CRF для кодека, файл пропускается с сообщением вида «цель недостижима (лучшее достигнутое: X.X)».',
     'help.skip_title': 'Правила пропуска в авторежиме',
@@ -204,6 +211,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'help.skip_min_size': 'Мин. уменьшение размера — файл пропускается, если расчётное уменьшение размера меньше этого процента (по умолчанию 5%). Если сжатие почти не экономит место, оно не имеет смысла.',
     'help.skip_crf_ge': 'Пропускать если CRF оригинала >= — файл пропускается, если его исходный CRF уже равен или больше этого значения (по умолчанию 18). Такие видео уже хорошо сжаты, дальнейшее сжатие только зря потратит время и ухудшит качество.',
     'help.skip_reported': 'Пропущенные файлы отмечаются в прогрессбаре сообщением «SKIP» с указанием причины.',
+    'help.support_title': 'Поддержка проекта',
+    'help.support_desc': 'Проект развивается одним автором. Если приложение вам полезно — вы можете отблагодарить автора, это поможет проекту:',
+    'help.support_link': 'Отблагодарить автора. Помощь проекту →',
   },
 };
 

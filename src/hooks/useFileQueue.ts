@@ -17,18 +17,22 @@ export function useFileQueue() {
     }
   }, []);
 
-  const removeFile = useCallback(async (index: number) => {
+  const removeFile = useCallback(async (path: string) => {
     try {
-      console.log('[useFileQueue] Removing file at index:', index);
-      await tauriInvoke('remove_file', { index });
-      setFiles(prev => prev.filter((_, i) => i !== index));
-      if (selectedIndex >= files.length - 1) {
-        setSelectedIndex(Math.min(selectedIndex, files.length - 2));
-      }
+      console.log('[useFileQueue] Removing file:', path);
+      const idx = files.findIndex(f => f.path === path);
+      await tauriInvoke('remove_file', { path });
+      setFiles(prev => prev.filter(f => f.path !== path));
+      setSelectedIndex(sel => {
+        if (sel === -1 || idx === -1) return sel;
+        if (idx < sel) return sel - 1;
+        if (idx === sel) return files.length > 1 ? Math.min(sel, files.length - 2) : -1;
+        return sel;
+      });
     } catch (e) {
       console.error('[useFileQueue] remove_file error:', e);
     }
-  }, [selectedIndex, files.length]);
+  }, [files]);
 
   const refreshFiles = useCallback(async () => {
     try {

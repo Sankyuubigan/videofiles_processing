@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { useVideoSync } from '../../hooks/useVideoSync';
@@ -21,6 +21,7 @@ export default function CompareTab({ addLog, isActive }: Props) {
   const [infoA, setInfoA] = useState<VideoInfo | null>(null);
   const [infoB, setInfoB] = useState<VideoInfo | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [volume, setVolume] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [errorA, setErrorA] = useState<string | null>(null);
@@ -32,6 +33,11 @@ export default function CompareTab({ addLog, isActive }: Props) {
   const boxBRef = useRef<HTMLDivElement>(null);
 
   useVideoSync(leaderRef, followerRef);
+
+  useEffect(() => {
+    if (leaderRef.current) leaderRef.current.volume = volume;
+    if (followerRef.current) followerRef.current.volume = volume;
+  }, [volume]);
 
   const getVideoSrc = useCallback((path: string): string => {
     if (!path) return '';
@@ -238,6 +244,7 @@ export default function CompareTab({ addLog, isActive }: Props) {
       <div className="compare-timeline">
         <button onClick={togglePlay}>{isPlaying ? t('compare.pause') : t('compare.play')}</button>
         <input
+          className="time-slider"
           type="range"
           min={0}
           max={duration || 0}
@@ -246,6 +253,17 @@ export default function CompareTab({ addLog, isActive }: Props) {
           onChange={handleSeek}
         />
         <span className="time-label">{formatTime(currentTime)} / {formatTime(duration)}</span>
+        <span className="volume-label">{t('compare.volume')}:</span>
+        <input
+          className="volume-slider"
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={volume}
+          onChange={(e) => setVolume(parseFloat(e.target.value))}
+        />
+        <span className="volume-value">{Math.round(volume * 100)}%</span>
       </div>
     </div>
   );
