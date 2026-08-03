@@ -51,7 +51,7 @@ pub fn find_best_crf(
     let pad_applied = codec == "libx264" && !use_hardware && !needs_fix;
 
     info!("Auto CRF: content type={:?}, using {} metric", video_type,
-        match video_type { VideoType::Animation | VideoType::Mixed => "SSIMULACRA2", _ => "VMAF" });
+        match video_type { VideoType::Animation => "SSIMULACRA2", _ => "VMAF" });
     info!("Auto CRF: settings -> vmaf_subsample={}, chunk_count={}, chunk_duration={}", vmaf_subsample, chunk_count, chunk_duration);
 
     let timestamps = if duration < 30.0 {
@@ -74,7 +74,7 @@ pub fn find_best_crf(
     let temp_dir = std::env::temp_dir();
 
     let effective_target = match video_type {
-        VideoType::Animation | VideoType::Mixed => target_ssimulacra2,
+        VideoType::Animation => target_ssimulacra2,
         _ => target_vmaf,
     };
 

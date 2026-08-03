@@ -2,6 +2,7 @@ pub mod models;
 pub mod session;
 pub mod lpips;
 pub mod dists;
+pub mod content_type;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

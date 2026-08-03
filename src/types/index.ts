@@ -29,7 +29,7 @@ export interface VideoInfo {
   complexity_score: number;
   complexity_desc: string;
   crf_value: number | null;
-  video_type: 'Animation' | 'LiveAction' | 'Mixed';
+  video_type: 'Animation' | 'LiveAction';
 }
 
 export interface FileEntry {

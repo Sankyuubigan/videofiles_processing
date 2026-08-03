@@ -278,6 +278,21 @@ function App() {
     setIsProcessing(false);
   }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, targetSsimulacra2, forceVfrFix, addLog]);
 
+  const handleVideoTypeChange = useCallback(async (index: number, videoType: string) => {
+    if (index < 0 || index >= files.length) return;
+    const file = files[index];
+    if (!file.info) return;
+    try {
+      await tauriInvoke('set_video_type', { path: file.path, videoType });
+      setFiles(prev => prev.map((f, i) =>
+        i === index && f.info ? { ...f, info: { ...f.info, video_type: videoType as any } } : f
+      ));
+      addLog(`Video type set to ${videoType} for ${file.path}`);
+    } catch (e: any) {
+      addLog(`Set video type error: ${e}`);
+    }
+  }, [files, setFiles, addLog]);
+
   const handleTrim = useCallback(async (filePath: string, seconds: number, fromStart: boolean) => {
     setIsProcessing(true);
     try {
@@ -364,6 +379,7 @@ function App() {
             onTestFile={handleTestFile}
             onNnTestFile={handleNnTestFile}
             onAllMetricsFile={handleAllMetricsFile}
+            onVideoTypeChange={handleVideoTypeChange}
             operationTab={operationTab}
             setOperationTab={setOperationTab}
             selectedFormat={selectedFormat}

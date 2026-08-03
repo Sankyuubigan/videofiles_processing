@@ -6,6 +6,7 @@ use super::models;
 
 pub(crate) static LPIPS_SESSION: Mutex<Option<Session>> = Mutex::new(None);
 pub(crate) static DISTS_SESSION: Mutex<Option<Session>> = Mutex::new(None);
+pub(crate) static CONTENT_TYPE_SESSION: Mutex<Option<Session>> = Mutex::new(None);
 
 /// Initialize ORT environment (call once at startup)
 pub fn init_ort() -> Result<(), String> {
@@ -76,5 +77,35 @@ pub fn ensure_dists_loaded() -> Result<(), String> {
 
     *guard = Some(session);
     info!("DISTS session loaded successfully");
+    Ok(())
+}
+
+/// Ensure content type classifier session is loaded (lazy singleton)
+pub fn ensure_content_type_loaded() -> Result<(), String> {
+    let mut guard = CONTENT_TYPE_SESSION.lock().map_err(|e| {
+        let msg = format!("Failed to lock content type session mutex: {}", e);
+        error!("{}", msg);
+        msg
+    })?;
+    if guard.is_some() {
+        return Ok(());
+    }
+
+    let model_path = models::content_type_model_path();
+    if !model_path.exists() {
+        return Err(format!(
+            "Content type model not found at {:?}. Place the ONNX model file there manually.",
+            model_path
+        ));
+    }
+
+    info!("Loading content type ONNX model from {:?}", model_path);
+    let session = Session::builder()
+        .map_err(|e| format!("Failed to build content type session: {}", e))?
+        .commit_from_file(&model_path)
+        .map_err(|e| format!("Failed to load content type model from {:?}: {}", model_path, e))?;
+
+    *guard = Some(session);
+    info!("Content type session loaded successfully");
     Ok(())
 }

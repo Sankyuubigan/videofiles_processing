@@ -35,19 +35,6 @@ fn get_content_type_flags(video_type: &VideoType, codec: &str, use_hardware: boo
                 _ => {}
             }
         }
-        VideoType::Mixed => {
-            // Для 3D (CGI, Mixed) принудительно используем 10-bit цвет, чтобы исключить бандинг
-            flags.extend(vec!["-pix_fmt".to_string(), "yuv420p10le".to_string()]);
-            match codec {
-                "libx265" => {
-                    // Используем aq-mode=3 для защиты темных областей и никаких tune=animation
-                    flags.extend(vec![
-                        "-x265-params".to_string(), "aq-mode=3".to_string(),
-                    ]);
-                }
-                _ => {}
-            }
-        }
         VideoType::LiveAction => {}
     }
 
@@ -70,8 +57,8 @@ pub fn fix_vfr_target_crf(
     cmd.extend(["-i".to_string(), input_path.to_string()]);
     let mut vf_filters = vec![format!("fps={}", DEFAULT_FPS_FIX)];
     
-    // Не используем yuv420p для Mixed (потому что мы задаем yuv420p10le в get_content_type_flags)
-    if video_info.is_10bit && codec != "libx265" && *video_type != VideoType::Mixed {
+    // Не используем yuv420p для 10-bit источников (потому что цвет оставляем как есть)
+    if video_info.is_10bit && codec != "libx265" {
         vf_filters.push("format=yuv420p".to_string());
     }
     
@@ -137,7 +124,7 @@ pub fn compress_video_core(
     cmd.extend(["-i".to_string(), input_path.to_string()]);
     let mut vf_filters = Vec::new();
     
-    if video_info.is_10bit && codec != "libx265" && *video_type != VideoType::Mixed {
+    if video_info.is_10bit && codec != "libx265" {
         vf_filters.push("format=yuv420p".to_string());
     }
     if codec == "libx264" && !use_hardware {
@@ -242,7 +229,7 @@ pub fn encode_chunk(
     if needs_fix {
         vf_filters.push(format!("fps={}", DEFAULT_FPS_FIX));
     }
-    if video_info.is_10bit && codec != "libx265" && *video_type != VideoType::Mixed {
+    if video_info.is_10bit && codec != "libx265" {
         vf_filters.push("format=yuv420p".to_string());
     }
     if codec == "libx264" && !use_hardware && !needs_fix {

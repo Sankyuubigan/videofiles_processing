@@ -3,6 +3,7 @@ use log::warn;
 
 pub const LPIPS_MODEL_FILENAME: &str = "lpips_alexnet.onnx";
 pub const DISTS_MODEL_FILENAME: &str = "dists_vgg16.onnx";
+pub const CONTENT_TYPE_MODEL_FILENAME: &str = "content_classifier_b0.onnx";
 
 /// Get the directory where NN models are stored
 pub fn models_dir() -> PathBuf {
@@ -26,6 +27,11 @@ pub fn lpips_model_path() -> PathBuf {
 /// Get full path to DISTS model
 pub fn dists_model_path() -> PathBuf {
     models_dir().join(DISTS_MODEL_FILENAME)
+}
+
+/// Get full path to content type classifier model
+pub fn content_type_model_path() -> PathBuf {
+    models_dir().join(CONTENT_TYPE_MODEL_FILENAME)
 }
 
 /// Check if a model file exists

@@ -38,7 +38,8 @@
     ],
     "resources": [
       "../ffmpeg/ffmpeg.exe",
-      "../ffmpeg/ffprobe.exe"
+      "../ffmpeg/ffprobe.exe",
+      "nn_models/content_classifier_b0.onnx"
     ]
   }
 }

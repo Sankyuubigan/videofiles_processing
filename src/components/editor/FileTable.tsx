@@ -10,6 +10,7 @@ interface Props {
   onTest: (i: number, forceMetric?: string) => void;
   onNnTest: (i: number, metric: string) => void;
   onAllMetrics: (i: number) => void;
+  onVideoTypeChange: (i: number, videoType: string) => void;
 }
 
 function getVmafClass(vmaf: number | null): string {
@@ -64,12 +65,11 @@ function getVideoTypeDisplay(info: FileEntry): { text: string; class: string } {
   switch (vt) {
     case 'Animation': return { text: 'Animation', class: 'cell-yellow' };
     case 'LiveAction': return { text: 'LiveAction', class: 'cell-green' };
-    case 'Mixed': return { text: 'Mixed', class: 'cell-blue' };
     default: return { text: vt, class: '' };
   }
 }
 
-export default function FileTable({ files, selectedIndex, onSelect, onRemove, onTest, onNnTest, onAllMetrics }: Props) {
+export default function FileTable({ files, selectedIndex, onSelect, onRemove, onTest, onNnTest, onAllMetrics, onVideoTypeChange }: Props) {
   if (files.length === 0) {
     return (
       <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>
@@ -115,7 +115,21 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
               <td title={file.path}>{name}</td>
               <td>{file.info ? formatFileSize(file.info.size_mb) : '--'}</td>
               <td>{file.info ? formatDuration(file.info.duration) : '--'}</td>
-              <td className={typeDisp.class}>{typeDisp.text}</td>
+              <td className={typeDisp.class}>
+                {file.info ? (
+                  <select
+                    className="video-type-select"
+                    value={file.info.video_type}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => { e.stopPropagation(); onVideoTypeChange(i, e.target.value); }}
+                  >
+                    <option value="Animation">Animation</option>
+                    <option value="LiveAction">LiveAction</option>
+                  </select>
+                ) : (
+                  typeDisp.text
+                )}
+              </td>
               <td className={crfDisp.class}>{crfDisp.text}</td>
               <td className={vfrDisp.class}>{vfrDisp.text}</td>
               <td className={estSizeDisp.class}>{estSizeDisp.text}</td>

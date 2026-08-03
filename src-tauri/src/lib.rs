@@ -58,6 +58,7 @@ pub fn run() {
             commands::file_commands::set_output_dir,
             commands::file_commands::get_output_dir,
             commands::file_commands::clear_queue,
+            commands::file_commands::set_video_type,
             commands::compress_commands::start_compress,
             commands::compress_commands::start_batch_compress,
             commands::compress_commands::cancel_processing,

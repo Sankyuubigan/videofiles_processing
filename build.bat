@@ -55,6 +55,11 @@ if %RUST_RESULT% neq 0 (
     exit /b 1
 )
 
+REM Copy NN models next to the executable
+echo Copying NN models...
+if not exist "src-tauri\target\debug\nn_models" mkdir "src-tauri\target\debug\nn_models"
+copy /y "src-tauri\nn_models\content_classifier_b0.onnx" "src-tauri\target\debug\nn_models\content_classifier_b0.onnx" >nul
+
 REM Launch application (start closes with console)
 echo Launching application...
 start "" "src-tauri\target\debug\videofile-pro.exe"

@@ -36,7 +36,7 @@ pub fn check_quality(
     let use_ssim = match metric_override.as_deref() {
         Some("SSIMULACRA2") => true,
         Some("VMAF") => false,
-        _ => matches!(video_type, VideoType::Animation | VideoType::Mixed),
+        _ => matches!(video_type, VideoType::Animation),
     };
 
     if use_ssim {

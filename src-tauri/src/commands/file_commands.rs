@@ -131,6 +131,33 @@ pub fn get_output_dir(state: State<FileQueueState>) -> Result<Option<String>, St
 }
 
 #[tauri::command]
+pub fn set_video_type(path: String, video_type: String, state: State<FileQueueState>) -> Result<(), String> {
+    let parsed = match video_type.as_str() {
+        "Animation" => crate::ffmpeg::probe::VideoType::Animation,
+        "LiveAction" => crate::ffmpeg::probe::VideoType::LiveAction,
+        _ => return Err(format!("Invalid video type: {}", video_type)),
+    };
+    info!("set_video_type: {} -> {}", path, parsed);
+
+    crate::video_processor::content_type::set_override(&path, &parsed)?;
+
+    let mut files = state.files.lock().map_err(|e| {
+        let msg = format!("Failed to lock file queue: {}", e);
+        error!("{}", msg);
+        msg
+    })?;
+    for entry in files.iter_mut() {
+        if entry.path == path {
+            if let Some(info) = entry.info.as_mut() {
+                info.video_type = parsed.clone();
+                info!("Updated video_type in queue for {}: {:?}", path, parsed);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn clear_queue(state: State<FileQueueState>) -> Result<(), String> {
     info!("clear_queue called");
     let mut files = state.files.lock().map_err(|e| {

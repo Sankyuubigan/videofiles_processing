@@ -26,3 +26,5 @@ test/
 /package-lock.json
 /src-tauri/Cargo.lock
 /test
+/models
+/tools
