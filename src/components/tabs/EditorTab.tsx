@@ -13,8 +13,6 @@ interface Props {
   onSelectOutputDir: () => void;
   onRemoveFile: (i: number) => void;
   onTestFile: (i: number, forceMetric?: string) => void;
-  onNnTestFile: (i: number, metric: string) => void;
-  onAllMetricsFile: (i: number) => void;
   onVideoTypeChange: (i: number, videoType: string) => void;
   operationTab: OperationTab;
   setOperationTab: (t: OperationTab) => void;
@@ -83,8 +81,6 @@ export default function EditorTab(props: Props) {
             onSelect={props.setSelectedIndex}
             onRemove={props.onRemoveFile}
             onTest={props.onTestFile}
-            onNnTest={props.onNnTestFile}
-            onAllMetrics={props.onAllMetricsFile}
             onVideoTypeChange={props.onVideoTypeChange}
           />
         </div>

@@ -36,7 +36,7 @@ pub fn check_quality(
     let use_ssim = match metric_override.as_deref() {
         Some("SSIMULACRA2") => true,
         Some("VMAF") => false,
-        _ => matches!(video_type, VideoType::Animation),
+        _ => matches!(video_type, VideoType::Animation | VideoType::Rendered),
     };
 
     if use_ssim {
@@ -76,49 +76,6 @@ pub fn check_quality(
             inference_ms: None,
         })
     }
-}
-
-/// Neural network quality check using LPIPS or DISTS.
-/// These are full-reference metrics that use deep learning to measure
-/// perceptual similarity between original and compressed frames.
-pub fn check_quality_nn(
-    original_path: &str,
-    encoded_path: &str,
-    start_time: f64,
-    duration: f64,
-    width: usize,
-    height: usize,
-    ignore_noise: bool,
-    cancel_flag: Arc<AtomicBool>,
-    metric: &str,
-) -> Result<QualityCheckResult, String> {
-    info!("NN quality check: using {}", metric);
-
-    let result = match metric {
-        "LPIPS" => {
-            crate::nn_quality::run_lpips(
-                original_path, encoded_path, start_time, duration,
-                width, height, ignore_noise, cancel_flag,
-                0.3, // default target (lower is better)
-            )?
-        }
-        "DISTS" => {
-            crate::nn_quality::run_dists(
-                original_path, encoded_path, start_time, duration,
-                width, height, ignore_noise, cancel_flag,
-                0.2, // default target (lower is better)
-            )?
-        }
-        _ => return Err(format!("Unknown NN metric: {}", metric)),
-    };
-
-    Ok(QualityCheckResult {
-        score: result.score,
-        metric: result.metric,
-        passed: result.passed,
-        target: result.target,
-        inference_ms: Some(result.inference_ms),
-    })
 }
 
 fn calculate_ssimulacra2(
@@ -251,87 +208,4 @@ fn image_to_yuvxyb_rgb(img: &image::DynamicImage) -> ssimulacra2::Rgb {
         ssimulacra2::TransferCharacteristic::SRGB,
         ssimulacra2::ColorPrimaries::BT709,
     ).expect("Failed to create Rgb for SSIMULACRA2")
-}
-
-pub fn check_quality_all(
-    original_path: &str,
-    encoded_path: &str,
-    start_time: f64,
-    duration: f64,
-    width: usize,
-    height: usize,
-    ignore_noise: bool,
-    cancel_flag: Arc<AtomicBool>,
-) -> Result<Vec<crate::quality_metrics::MetricResult>, String> {
-    use std::time::Instant;
-
-    let t0 = Instant::now();
-    info!("Running all quality metrics...");
-
-    let tmp_dir = std::env::temp_dir();
-    let ts_ms = (start_time * 1000.0) as u64;
-    let orig_png = tmp_dir.join(format!("allmetrics_orig_{}_{}.png", std::process::id(), ts_ms));
-    let dist_png = tmp_dir.join(format!("allmetrics_dist_{}_{}.png", std::process::id(), ts_ms));
-
-    let orig_str = orig_png.to_string_lossy().to_string();
-    let dist_str = dist_png.to_string_lossy().to_string();
-
-    let orig_timestamp = start_time + if duration > 0.0 { duration / 2.0 } else { 0.0 };
-    extract_frame_for_ssim(original_path, &orig_str, orig_timestamp, width, height, ignore_noise)?;
-
-    if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-        let _ = std::fs::remove_file(&orig_png);
-        let _ = std::fs::remove_file(&dist_png);
-        return Err("Cancelled".to_string());
-    }
-
-    let encoded_timestamp = if duration > 0.0 { duration / 2.0 } else { 0.0 };
-    extract_frame_for_ssim(encoded_path, &dist_str, encoded_timestamp, width, height, ignore_noise)?;
-
-    let orig_img = image::open(&orig_png).map_err(|e| {
-        let _ = std::fs::remove_file(&orig_png);
-        let _ = std::fs::remove_file(&dist_png);
-        format!("Failed to load original frame for all metrics: {}", e)
-    })?;
-    let dist_img = image::open(&dist_png).map_err(|e| {
-        let _ = std::fs::remove_file(&orig_png);
-        let _ = std::fs::remove_file(&dist_png);
-        format!("Failed to load distorted frame for all metrics: {}", e)
-    })?;
-    let _ = std::fs::remove_file(&orig_png);
-    let _ = std::fs::remove_file(&dist_png);
-
-    let mut all_results: Vec<crate::quality_metrics::MetricResult> = Vec::new();
-
-    // 1. iqa metrics (SSIM, MS-SSIM, DSSIM, Butteraugli, CIEDE2000, PSNR)
-    let iqa_results = crate::quality_metrics::iqa_metrics::compute_iqa_metrics(&orig_img, &dist_img);
-    all_results.extend(iqa_results);
-
-    // 2. oximedia LPIPS approximation
-    let oximedia_result = crate::quality_metrics::oximedia_metrics::compute_oximedia_lpips(&orig_img, &dist_img);
-    all_results.push(oximedia_result);
-
-    // 3. oximedia VMAF, VIF
-    let oximedia_extra = crate::quality_metrics::oximedia_metrics::compute_oximedia_metrics(&orig_img, &dist_img);
-    all_results.extend(oximedia_extra);
-
-    if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-        return Err("Cancelled".to_string());
-    }
-
-    let total_ms = t0.elapsed().as_millis() as u64;
-    info!("All metrics completed in {}ms, {} results", total_ms, all_results.len());
-
-    for r in &all_results {
-        info!(
-            "  {} = {:.1}% (raw {:.4} {}, target {} {:.4}) {} [{}ms]",
-            r.metric, r.percent, r.score, r.unit,
-            if r.passed { "<=" } else { ">" },
-            r.target,
-            if r.passed { "PASS" } else { "FAIL" },
-            r.compute_ms,
-        );
-    }
-
-    Ok(all_results)
 }

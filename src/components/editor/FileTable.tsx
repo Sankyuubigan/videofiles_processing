@@ -8,8 +8,6 @@ interface Props {
   onSelect: (i: number) => void;
   onRemove: (i: number) => void;
   onTest: (i: number, forceMetric?: string) => void;
-  onNnTest: (i: number, metric: string) => void;
-  onAllMetrics: (i: number) => void;
   onVideoTypeChange: (i: number, videoType: string) => void;
 }
 
@@ -47,13 +45,6 @@ function getVmafDisplay(info: FileEntry): { text: string; class: string } {
   return { text: `${crf} / ${shortMetric} ${vmaf.toFixed(1)}`, class: getVmafClass(vmaf) };
 }
 
-function getNnDisplay(info: FileEntry): { text: string; class: string } {
-  if (!info.nn_test_result) return { text: '--', class: '' };
-  const r = info.nn_test_result;
-  const cls = r.passed ? 'cell-green' : 'cell-red';
-  return { text: `${r.metric} ${r.score.toFixed(4)} (${r.inference_ms}ms)`, class: cls };
-}
-
 function getEstTimeDisplay(info: FileEntry): string {
   if (!info.test_result) return '--';
   return info.test_result.test_est_time;
@@ -65,11 +56,12 @@ function getVideoTypeDisplay(info: FileEntry): { text: string; class: string } {
   switch (vt) {
     case 'Animation': return { text: 'Animation', class: 'cell-yellow' };
     case 'LiveAction': return { text: 'LiveAction', class: 'cell-green' };
+    case 'Rendered': return { text: 'Rendered', class: 'cell-purple' };
     default: return { text: vt, class: '' };
   }
 }
 
-export default function FileTable({ files, selectedIndex, onSelect, onRemove, onTest, onNnTest, onAllMetrics, onVideoTypeChange }: Props) {
+export default function FileTable({ files, selectedIndex, onSelect, onRemove, onTest, onVideoTypeChange }: Props) {
   if (files.length === 0) {
     return (
       <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>
@@ -91,7 +83,6 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
           <th>Est. Size (Diff)</th>
           <th>CRF / Metric</th>
           <th>Est. Time</th>
-          <th>Neural Net</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -101,7 +92,6 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
           const vfrDisp = getVfrDisplay(file);
           const estSizeDisp = getEstSizeDisplay(file);
           const vmafDisp = getVmafDisplay(file);
-          const nnDisp = getNnDisplay(file);
           const estTime = getEstTimeDisplay(file);
           const typeDisp = getVideoTypeDisplay(file);
           const name = file.path.split(/[\\/]/).pop() || file.path;
@@ -125,6 +115,7 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
                   >
                     <option value="Animation">Animation</option>
                     <option value="LiveAction">LiveAction</option>
+                    <option value="Rendered">Rendered</option>
                   </select>
                 ) : (
                   typeDisp.text
@@ -135,15 +126,11 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
               <td className={estSizeDisp.class}>{estSizeDisp.text}</td>
               <td className={vmafDisp.class}>{vmafDisp.text}</td>
               <td>{estTime}</td>
-              <td className={nnDisp.class}>{nnDisp.text}</td>
               <td>
                 <div className="action-btn-group">
                   <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(i); }}>{t('table.auto_test')}</button>
                   <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(i, 'VMAF'); }}>{t('table.test_vmaf')}</button>
                   <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(i, 'SSIMULACRA2'); }}>{t('table.test_ssim')}</button>
-                  <button className="action-btn test nn" onClick={(e) => { e.stopPropagation(); onNnTest(i, 'LPIPS'); }}>{t('table.test_lpips')}</button>
-                  <button className="action-btn test nn" onClick={(e) => { e.stopPropagation(); onNnTest(i, 'DISTS'); }}>{t('table.test_dists')}</button>
-                  <button className="action-btn test all" onClick={(e) => { e.stopPropagation(); onAllMetrics(i); }}>{t('table.test_all')}</button>
                   <button className="action-btn delete" onClick={(e) => { e.stopPropagation(); onRemove(i); }}>x</button>
                 </div>
               </td>

@@ -29,14 +29,13 @@ export interface VideoInfo {
   complexity_score: number;
   complexity_desc: string;
   crf_value: number | null;
-  video_type: 'Animation' | 'LiveAction';
+  video_type: 'Animation' | 'LiveAction' | 'Rendered';
 }
 
 export interface FileEntry {
   path: string;
   info: VideoInfo | null;
   test_result: TestResult | null;
-  nn_test_result: NnTestResult | null;
 }
 
 export interface TestResult {
@@ -47,14 +46,6 @@ export interface TestResult {
   is_profitable: boolean;
   test_crf: number;
   metric: string;
-}
-
-export interface NnTestResult {
-  score: number;
-  metric: string;
-  inference_ms: number;
-  target: number;
-  passed: boolean;
 }
 
 export interface Settings {

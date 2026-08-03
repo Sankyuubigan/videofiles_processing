@@ -17,8 +17,7 @@ const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 /// Classify video content type from extracted frames (model: efficientnet_b0,
-/// classes: anime / real / rendered). The decision rule matches the validated
-/// pipeline: LiveAction only when "real" probability dominates anime+rendered.
+/// classes: anime / real / rendered, in that order).
 pub fn classify_frames(frames: &[RgbFrame]) -> Result<VideoType, String> {
     if frames.is_empty() {
         return Err("no frames to classify".to_string());
@@ -41,10 +40,17 @@ pub fn classify_frames(frames: &[RgbFrame]) -> Result<VideoType, String> {
         mean[0], mean[1], mean[2]
     );
 
-    Ok(if mean[1] > mean[0] + mean[2] {
-        VideoType::LiveAction
-    } else {
-        VideoType::Animation
+    let best = mean
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    Ok(match best {
+        1 => VideoType::LiveAction,
+        2 => VideoType::Rendered,
+        _ => VideoType::Animation,
     })
 }
 

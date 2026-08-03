@@ -51,7 +51,7 @@ pub fn find_best_crf(
     let pad_applied = codec == "libx264" && !use_hardware && !needs_fix;
 
     info!("Auto CRF: content type={:?}, using {} metric", video_type,
-        match video_type { VideoType::Animation => "SSIMULACRA2", _ => "VMAF" });
+        match video_type { VideoType::Animation | VideoType::Rendered => "SSIMULACRA2", _ => "VMAF" });
     info!("Auto CRF: settings -> vmaf_subsample={}, chunk_count={}, chunk_duration={}", vmaf_subsample, chunk_count, chunk_duration);
 
     let timestamps = if duration < 30.0 {
@@ -74,7 +74,7 @@ pub fn find_best_crf(
     let temp_dir = std::env::temp_dir();
 
     let effective_target = match video_type {
-        VideoType::Animation => target_ssimulacra2,
+        VideoType::Animation | VideoType::Rendered => target_ssimulacra2,
         _ => target_vmaf,
     };
 
@@ -189,6 +189,7 @@ pub fn run_chunk_test(
     use_hardware: bool, cancel_flag: Arc<AtomicBool>,
     auto_crf: bool, target_vmaf: f64, target_ssimulacra2: f64, force_vfr_fix: bool,
     force_metric: Option<String>,
+    progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
 ) -> Result<ChunkTestResult, String> {
     let mut actual_crf = crf_value;
     let settings = crate::settings::load_settings();
@@ -199,7 +200,7 @@ pub fn run_chunk_test(
 
     if auto_crf {
         info!("Chunk Test: Auto CRF enabled, target VMAF={}", target_vmaf);
-        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), None, force_vfr_fix);
+        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix);
         actual_crf = acrf.crf.unwrap_or_else(|| {
             warn!("Chunk Test: Auto CRF target unreachable, using fallback CRF (best score: {:.1})", acrf.best_vmaf);
             crf_value
@@ -236,7 +237,16 @@ pub fn run_chunk_test(
     let mut encode_time_total: f64 = 0.0;
     let mut used_metric = "VMAF".to_string();
 
+    // Auto CRF search reports 10..60, so chunks fill the remaining range.
+    // Manual test reports chunks across the whole 0..100 range.
+    let progress_start = if auto_crf { 60 } else { 0 };
+    let progress_span = 100 - progress_start;
+
     for (i, ts) in timestamps.iter().enumerate() {
+        if let Some(cb) = &progress_cb {
+            let pct = progress_start + ((i as f32 + 1.0) / timestamps.len() as f32 * progress_span as f32) as i32;
+            cb(pct, format!("Chunk {}/{} at CRF {}...", i + 1, timestamps.len(), actual_crf));
+        }
         let out_path = temp_dir.join(format!("chunk_test_{}_{}_{}.mkv", std::process::id(), chrono::Utc::now().timestamp(), i));
         let out_str = out_path.to_string_lossy().to_string();
 

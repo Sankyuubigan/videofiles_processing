@@ -8,6 +8,7 @@ use crate::settings::get_actual_ffmpeg_path;
 pub enum VideoType {
     Animation,
     LiveAction,
+    Rendered,
 }
 
 impl std::fmt::Display for VideoType {
@@ -15,6 +16,7 @@ impl std::fmt::Display for VideoType {
         match self {
             VideoType::Animation => write!(f, "Animation"),
             VideoType::LiveAction => write!(f, "LiveAction"),
+            VideoType::Rendered => write!(f, "Rendered"),
         }
     }
 }

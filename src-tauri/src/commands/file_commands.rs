@@ -6,15 +6,12 @@ use log::{info, error};
 
 use crate::video_processor::compress::get_full_video_info;
 use crate::ffmpeg::probe::VideoInfo;
-use super::test_commands::NnTestResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
     pub path: String,
     pub info: Option<VideoInfo>,
     pub test_result: Option<TestResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nn_test_result: Option<NnTestResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +61,7 @@ pub async fn add_files(paths: Vec<String>, state: tauri::State<'_, FileQueueStat
                     None
                 }
             };
-            FileEntry { path, info: entry_info, test_result: None, nn_test_result: None }
+            FileEntry { path, info: entry_info, test_result: None }
         })
     }).collect();
 
@@ -135,6 +132,7 @@ pub fn set_video_type(path: String, video_type: String, state: State<FileQueueSt
     let parsed = match video_type.as_str() {
         "Animation" => crate::ffmpeg::probe::VideoType::Animation,
         "LiveAction" => crate::ffmpeg::probe::VideoType::LiveAction,
+        "Rendered" => crate::ffmpeg::probe::VideoType::Rendered,
         _ => return Err(format!("Invalid video type: {}", video_type)),
     };
     info!("set_video_type: {} -> {}", path, parsed);

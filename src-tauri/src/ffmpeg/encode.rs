@@ -36,6 +36,7 @@ fn get_content_type_flags(video_type: &VideoType, codec: &str, use_hardware: boo
             }
         }
         VideoType::LiveAction => {}
+        VideoType::Rendered => {}
     }
 
     flags

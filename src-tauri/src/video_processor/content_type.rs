@@ -10,17 +10,28 @@ use crate::nn_quality::content_type::{classify_frames, RgbFrame};
 const FRAME_COUNT: usize = 10;
 
 /// User overrides for content type, persisted next to settings.json:
-/// path -> "Animation" | "LiveAction". Applied before NN detection so manual
-/// corrections survive re-detection during compression.
+/// path -> "Animation" | "LiveAction" | "Rendered". Applied before NN detection so
+/// manual corrections survive re-detection during compression.
 static OVERRIDE_CACHE: Mutex<Option<HashMap<String, VideoType>>> = Mutex::new(None);
 
-pub fn detect_content_type(input_path: &str, duration: f64) -> VideoType {
-    info!("Content type detection: classifying {} frames from {}", FRAME_COUNT, input_path);
+/// Auto-detected content types, persisted to content_type_cache.json.
+/// Detection runs only once per file (per session + across restarts) instead of
+/// on every test/compress call.
+static DETECT_CACHE: Mutex<Option<HashMap<String, VideoType>>> = Mutex::new(None);
 
+pub fn detect_content_type(input_path: &str, duration: f64) -> VideoType {
     if let Some(overridden) = get_override(input_path) {
         info!("Content type override found for {}: {:?}", input_path, overridden);
         return overridden;
     }
+
+    let canonical = canonicalize(input_path);
+    if let Some(cached) = get_cached(&canonical) {
+        info!("Content type cache hit for {}: {:?}", input_path, cached);
+        return cached;
+    }
+
+    info!("Content type detection: classifying {} frames from {}", FRAME_COUNT, input_path);
 
     let timestamps = generate_timestamps(duration);
     let path = input_path.to_string();
@@ -45,6 +56,7 @@ pub fn detect_content_type(input_path: &str, duration: f64) -> VideoType {
     match classify_frames(&frames) {
         Ok(vt) => {
             info!("Content type result: {:?}", vt);
+            save_to_cache(&canonical, vt.clone());
             vt
         }
         Err(e) => {
@@ -60,6 +72,7 @@ pub fn set_override(input_path: &str, video_type: &VideoType) -> Result<(), Stri
     let canonical = canonicalize(input_path);
     overrides.insert(canonical.clone(), video_type.clone());
     save_overrides(&overrides)?;
+    save_to_cache(&canonical, video_type.clone());
     info!("Content type override saved for {}: {:?}", canonical, video_type);
     Ok(())
 }
@@ -88,15 +101,22 @@ fn canonicalize(input_path: &str) -> String {
 }
 
 fn overrides_file_path() -> std::path::PathBuf {
-    let exe_dir = match std::env::current_exe() {
+    exe_dir().join("content_type_overrides.json")
+}
+
+fn cache_file_path() -> std::path::PathBuf {
+    exe_dir().join("content_type_cache.json")
+}
+
+fn exe_dir() -> std::path::PathBuf {
+    match std::env::current_exe() {
         Ok(p) => p.parent().map(|p| p.to_path_buf()),
         Err(e) => {
             warn!("current_exe() failed, falling back to cwd: {}", e);
             None
         }
     }
-    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    exe_dir.join("content_type_overrides.json")
+    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
 
 fn load_overrides() -> HashMap<String, VideoType> {
@@ -105,28 +125,11 @@ fn load_overrides() -> HashMap<String, VideoType> {
             return cached.clone();
         }
     }
-    let path = overrides_file_path();
-    let overrides = if path.exists() {
-        match std::fs::read_to_string(&path) {
-            Ok(content) => match serde_json::from_str::<HashMap<String, VideoType>>(&content) {
-                Ok(map) => map,
-                Err(e) => {
-                    warn!("Failed to parse overrides file {:?}: {}", path, e);
-                    HashMap::new()
-                }
-            },
-            Err(e) => {
-                warn!("Failed to read overrides file {:?}: {}", path, e);
-                HashMap::new()
-            }
-        }
-    } else {
-        HashMap::new()
-    };
+    let loaded = load_map(&overrides_file_path());
     if let Ok(mut guard) = OVERRIDE_CACHE.lock() {
-        *guard = Some(overrides.clone());
+        *guard = Some(loaded.clone());
     }
-    overrides
+    loaded
 }
 
 fn save_overrides(overrides: &HashMap<String, VideoType>) -> Result<(), String> {
@@ -137,6 +140,56 @@ fn save_overrides(overrides: &HashMap<String, VideoType>) -> Result<(), String> 
         *guard = Some(overrides.clone());
     }
     Ok(())
+}
+
+fn get_cached(canonical: &str) -> Option<VideoType> {
+    if let Ok(guard) = DETECT_CACHE.lock() {
+        if let Some(ref cached) = *guard {
+            return cached.get(canonical).cloned();
+        }
+    }
+    let loaded = load_map(&cache_file_path());
+    if let Ok(mut guard) = DETECT_CACHE.lock() {
+        *guard = Some(loaded.clone());
+    }
+    loaded.get(canonical).cloned()
+}
+
+fn save_to_cache(canonical: &str, video_type: VideoType) {
+    let mut cache = match DETECT_CACHE.lock() {
+        Ok(guard) => guard.clone().unwrap_or_else(|| load_map(&cache_file_path())),
+        Err(_) => return,
+    };
+    cache.insert(canonical.to_string(), video_type.clone());
+    if let Ok(mut guard) = DETECT_CACHE.lock() {
+        *guard = Some(cache.clone());
+    }
+    let path = cache_file_path();
+    if let Ok(json) = serde_json::to_string_pretty(&cache) {
+        if let Err(e) = std::fs::write(&path, json) {
+            warn!("Failed to write content type cache {:?}: {}", path, e);
+        }
+    }
+}
+
+fn load_map(path: &std::path::Path) -> HashMap<String, VideoType> {
+    if path.exists() {
+        match std::fs::read_to_string(path) {
+            Ok(content) => match serde_json::from_str::<HashMap<String, VideoType>>(&content) {
+                Ok(map) => map,
+                Err(e) => {
+                    warn!("Failed to parse {:?}: {}", path, e);
+                    HashMap::new()
+                }
+            },
+            Err(e) => {
+                warn!("Failed to read {:?}: {}", path, e);
+                HashMap::new()
+            }
+        }
+    } else {
+        HashMap::new()
+    }
 }
 
 fn generate_timestamps(duration: f64) -> Vec<f64> {

@@ -64,13 +64,13 @@ body { margin: 0; overflow: hidden; }
 .file-table .cell-gray { color: #888; }
 .file-table .cell-yellow { color: #f9a825; }
 .file-table .cell-blue { color: #1565c0; }
+.file-table .cell-purple { color: #7b1fa2; }
 
 .file-table .video-type-select { font-size: 13px; padding: 1px 4px; border: 1px solid #ccc; border-radius: 3px; background: #fff; cursor: pointer; }
 
 .action-btn { padding: 2px 8px; cursor: pointer; border: 1px solid #ccc; border-radius: 3px; background: #fff; font-size: 12px; }
 .action-btn:hover { background: #e8e8e8; }
 .action-btn.test { background: #e3f2fd; border-color: #1a73e8; }
-.action-btn.test.nn { background: #f3e5f5; border-color: #7b1fa2; color: #7b1fa2; }
 .action-btn.delete { color: #c62828; }
 
 .action-btn-group { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
