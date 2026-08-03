@@ -67,5 +67,5 @@ pub fn extract_frame(
         "-q:v".to_string(), "2".to_string(),
         output_path.to_string(),
     ];
-    run_command_simple(&cmd, cancel_flag)
+    run_command_simple(&cmd, cancel_flag, None)
 }

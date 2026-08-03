@@ -197,19 +197,19 @@ function App() {
       await tauriInvoke('pause_processing');
       setIsPaused(true);
       setProgress(prev => ({ ...prev, message: 'Paused' }));
-    } catch (e) {
-      console.error('pause error:', e);
+    } catch (e: any) {
+      addLog(`Pause error: ${e}`);
     }
-  }, []);
+  }, [addLog]);
 
   const handleResume = useCallback(async () => {
     try {
       await tauriInvoke('resume_processing');
       setIsPaused(false);
-    } catch (e) {
-      console.error('resume error:', e);
+    } catch (e: any) {
+      addLog(`Resume error: ${e}`);
     }
-  }, []);
+  }, [addLog]);
 
   const handleTestFile = useCallback(async (path: string, forceMetric?: string) => {
     if (!path) return;

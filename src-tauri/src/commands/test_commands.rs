@@ -53,6 +53,7 @@ pub async fn run_chunk_test_cmd(
 
     let path_for_log = path.clone();
     let cancel = proc_state.cancel_flag.clone();
+    let child_pid = proc_state.current_child_pid.clone();
     let progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>> = {
         let app = app.clone();
         Some(Arc::new(move |percent: i32, message: String| {
@@ -60,7 +61,7 @@ pub async fn run_chunk_test_cmd(
         }))
     };
     let result = tokio::task::spawn_blocking(move || {
-        run_chunk_test(&path, &codec, crf_value, &preset_value, use_hardware, cancel, auto_crf, target_vmaf, target_ssimulacra2, force_vfr_fix, force_metric, progress_cb)
+        run_chunk_test(&path, &codec, crf_value, &preset_value, use_hardware, cancel, auto_crf, target_vmaf, target_ssimulacra2, force_vfr_fix, force_metric, progress_cb, Some(child_pid))
     }).await.map_err(|e| {
         let msg = format!("Chunk test thread panicked: {}", e);
         error!("{}", msg);
@@ -143,6 +144,7 @@ pub async fn run_batch_test(
     for (i, file) in files_vec.iter().enumerate() {
         if proc_state.cancel_flag.load(Ordering::Relaxed) { break; }
         let cancel = proc_state.cancel_flag.clone();
+        let child_pid = proc_state.current_child_pid.clone();
         let path = file.path.clone();
         let codec = codec.clone();
         let preset = preset_value.clone();
@@ -154,7 +156,7 @@ pub async fn run_batch_test(
         };
 
         let result = tokio::task::spawn_blocking(move || {
-            run_chunk_test(&path, &codec, crf_value, &preset, use_hardware, cancel, auto_crf, target_vmaf, target_ssimulacra2, force_vfr_fix, None, progress_cb)
+            run_chunk_test(&path, &codec, crf_value, &preset, use_hardware, cancel, auto_crf, target_vmaf, target_ssimulacra2, force_vfr_fix, None, progress_cb, Some(child_pid))
         }).await.map_err(|e| {
             let msg = format!("Batch test thread panicked for {}: {}", file.path, e);
             error!("{}", msg);

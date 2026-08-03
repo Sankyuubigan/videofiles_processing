@@ -1,11 +1,11 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::process::Command;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use log::{info, warn};
 use image::GenericImageView;
 
 use crate::ffmpeg::probe::VideoType;
 use crate::ffmpeg::encode::calculate_vmaf;
+use crate::ffmpeg::core::run_command_simple;
 
 pub struct QualityCheckResult {
     pub score: f64,
@@ -31,6 +31,7 @@ pub fn check_quality(
     target_vmaf: f64,
     target_ssimulacra2: f64,
     cancel_flag: Arc<AtomicBool>,
+    child_pid: Option<Arc<AtomicU32>>,
     metric_override: Option<String>,
 ) -> Result<QualityCheckResult, String> {
     let use_ssim = match metric_override.as_deref() {
@@ -43,7 +44,7 @@ pub fn check_quality(
         info!("Quality check: using SSIMULACRA2");
         let score = calculate_ssimulacra2(
             original_path, encoded_path, start_time, duration,
-            width, height, force_vfr_fix, ignore_noise, cancel_flag,
+            width, height, force_vfr_fix, ignore_noise, cancel_flag, child_pid,
         )?;
         let passed = score >= target_ssimulacra2;
         info!("Quality check: SSIMULACRA2={:.1} (target > {:.1}) {}",
@@ -60,7 +61,7 @@ pub fn check_quality(
         let score = calculate_vmaf(
             original_path, encoded_path, start_time, duration,
             n_subsample, width, video_info, force_vfr_fix, pad_applied,
-            ignore_noise, cancel_flag,
+            ignore_noise, cancel_flag, child_pid,
         );
         if score < 0.0 {
             return Err(format!("VMAF calculation failed (score={})", score));
@@ -88,6 +89,7 @@ fn calculate_ssimulacra2(
     _force_vfr_fix: bool,
     ignore_noise: bool,
     cancel_flag: Arc<AtomicBool>,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> Result<f64, String> {
     let tmp_dir = std::env::temp_dir();
     let ts_ms = (start_time * 1000.0) as u64;
@@ -98,10 +100,10 @@ fn calculate_ssimulacra2(
     let dist_str = dist_ppm.to_string_lossy().to_string();
 
     let orig_timestamp = start_time + if duration > 0.0 { duration / 2.0 } else { 0.0 };
-    extract_frame_for_ssim(original_path, &orig_str, orig_timestamp, width, height, ignore_noise)?;
+    extract_frame_for_ssim(original_path, &orig_str, orig_timestamp, width, height, ignore_noise, cancel_flag.clone(), child_pid.clone())?;
 
     let encoded_timestamp = if duration > 0.0 { duration / 2.0 } else { 0.0 };
-    extract_frame_for_ssim(encoded_path, &dist_str, encoded_timestamp, width, height, ignore_noise)?;
+    extract_frame_for_ssim(encoded_path, &dist_str, encoded_timestamp, width, height, ignore_noise, cancel_flag.clone(), child_pid)?;
 
     let orig_img = image::open(&orig_ppm).map_err(|e| {
         let _ = std::fs::remove_file(&orig_ppm);
@@ -142,6 +144,8 @@ fn extract_frame_for_ssim(
     orig_width: usize,
     orig_height: usize,
     ignore_noise: bool,
+    cancel_flag: Arc<AtomicBool>,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> Result<(), String> {
     let mut vf_filters = Vec::new();
     
@@ -159,36 +163,26 @@ fn extract_frame_for_ssim(
         vf_filters.push("scale=-1:720:flags=bicubic".to_string());
     }
 
-    let ffmpeg_path = crate::settings::get_actual_ffmpeg_path();
-    let mut cmd = Command::new(&ffmpeg_path);
-    
-    cmd.args([
-        "-y", "-ss", &format!("{:.3}", timestamp),
-        "-i", input_path,
-    ]);
+    let mut cmd = vec![
+        "ffmpeg".to_string(), "-y".to_string(),
+        "-ss".to_string(), format!("{:.3}", timestamp),
+        "-i".to_string(), input_path.to_string(),
+    ];
 
     if !vf_filters.is_empty() {
-        cmd.args(["-vf", &vf_filters.join(",")]);
+        cmd.extend(["-vf".to_string(), vf_filters.join(",")]);
     }
 
-    cmd.args([
-        "-frames:v", "1",
-        "-pix_fmt", "rgb24",
-        output_path,
+    cmd.extend([
+        "-frames:v".to_string(), "1".to_string(),
+        "-pix_fmt".to_string(), "rgb24".to_string(),
+        output_path.to_string(),
     ]);
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
-    }
-    
-    let output = cmd.output()
-        .map_err(|e| format!("ffmpeg launch failed for SSIMULACRA2 frame: {}", e))?;
+    let result = run_command_simple(&cmd, cancel_flag, child_pid);
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("ffmpeg frame extraction failed: {}", stderr.lines().last().unwrap_or("unknown")));
+    if !result.success {
+        return Err(format!("ffmpeg frame extraction failed: {}", result.message));
     }
 
     Ok(())

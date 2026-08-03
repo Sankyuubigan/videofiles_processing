@@ -207,6 +207,7 @@ pub fn encode_chunk(
     codec: &str, crf_value: i32, preset_value: &str, use_hardware: bool,
     video_info: &super::probe::VideoInfo, video_type: &VideoType, force_vfr_fix: bool,
     cancel_flag: Arc<AtomicBool>,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -268,13 +269,14 @@ pub fn encode_chunk(
     }
     
     cmd.extend(["-t".to_string(), duration.to_string(), "-an".to_string(), output_path.to_string()]);
-    run_command_simple(&cmd, cancel_flag)
+    run_command_simple(&cmd, cancel_flag, child_pid)
 }
 
 pub fn calculate_vmaf(
     original_path: &str, chunk_path: &str, start_time: f64, duration: f64,
     n_subsample: usize, width: usize, video_info: &super::probe::VideoInfo,
     force_vfr_fix: bool, pad_applied: bool, ignore_noise: bool, cancel_flag: Arc<AtomicBool>,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> f64 {
     let tmp_dir = std::env::temp_dir();
     let json_filename = format!("vmaf_{}_{}.json", std::process::id(), chrono::Utc::now().timestamp_millis());
@@ -324,7 +326,7 @@ pub fn calculate_vmaf(
         "-".to_string(),
     ];
 
-    let result = run_command_simple(&cmd, cancel_flag);
+    let result = run_command_simple(&cmd, cancel_flag, child_pid);
     let mut score = -1.0;
 
     if json_path.exists() {

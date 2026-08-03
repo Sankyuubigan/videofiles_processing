@@ -85,6 +85,9 @@ pub fn run_command_with_progress(
         Some(s) => s,
         None => {
             log::error!("Failed to capture FFmpeg stdout in run_command_with_progress");
+            if let Some(ref pid_ref) = child_pid {
+                pid_ref.store(0, Ordering::Release);
+            }
             return RunResult { success: false, message: "Failed to capture FFmpeg stdout".to_string() };
         }
     };
@@ -100,6 +103,9 @@ pub fn run_command_with_progress(
         if cancel_flag.load(Ordering::Relaxed) {
             let _ = child.kill();
             log::warn!("FFmpeg operation cancelled");
+            if let Some(ref pid_ref) = child_pid {
+                pid_ref.store(0, Ordering::Release);
+            }
             return RunResult { success: false, message: "Operation cancelled".to_string() };
         }
 
@@ -124,7 +130,11 @@ pub fn run_command_with_progress(
         }
     }
 
-    match child.wait() {
+    let wait_result = child.wait();
+    if let Some(ref pid_ref) = child_pid {
+        pid_ref.store(0, Ordering::Release);
+    }
+    match wait_result {
         Ok(return_code) => {
             let full_output = output_log.join("");
             if !return_code.success() {
@@ -149,7 +159,11 @@ pub fn run_command_with_progress(
     }
 }
 
-pub fn run_command_simple(cmd: &[String], cancel_flag: Arc<AtomicBool>) -> RunResult {
+pub fn run_command_simple(
+    cmd: &[String],
+    cancel_flag: Arc<AtomicBool>,
+    child_pid: Option<Arc<AtomicU32>>,
+) -> RunResult {
     log::debug!("Executing FFmpeg command (simple): {}", cmd.join(" "));
     let ffmpeg_path = get_actual_ffmpeg_path();
 
@@ -171,40 +185,69 @@ pub fn run_command_simple(cmd: &[String], cancel_flag: Arc<AtomicBool>) -> RunRe
         }
     };
 
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            log::error!("Failed to capture FFmpeg stdout in run_command_simple");
-            return RunResult { success: false, message: "Failed to capture FFmpeg stdout".to_string() };
-        }
-    };
+    if let Some(ref pid_ref) = child_pid {
+        pid_ref.store(child.id(), Ordering::Release);
+    }
+
+    let stdout_handle = child.stdout.take().map(|stdout| {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            let mut output_log = Vec::new();
+            let mut error_lines = Vec::new();
+            for line_result in reader.lines() {
+                if let Ok(line) = line_result {
+                    output_log.push(line.clone());
+                    let lower = line.to_lowercase();
+                    if ["error", "failed", "invalid", "cannot", "unable"].iter().any(|k| lower.contains(k)) {
+                        error_lines.push(line.trim().to_string());
+                    }
+                }
+            }
+            (output_log, error_lines)
+        })
+    });
 
     let stderr_handle = child.stderr.take().map(spawn_stderr_drainer);
 
-    let reader = BufReader::new(stdout);
-
-    let mut output_log = Vec::new();
-    let mut error_lines = Vec::new();
-
-    for line_result in reader.lines() {
+    let mut cancelled = false;
+    let mut wait_error: Option<String> = None;
+    loop {
         if cancel_flag.load(Ordering::Relaxed) {
             let _ = child.kill();
             log::warn!("FFmpeg operation cancelled (simple)");
-            return RunResult { success: false, message: "Operation cancelled".to_string() };
+            cancelled = true;
+            break;
         }
-        if let Ok(line) = line_result {
-            output_log.push(line.clone());
-            let lower = line.to_lowercase();
-            if ["error", "failed", "invalid", "cannot", "unable"].iter().any(|k| lower.contains(k)) {
-                error_lines.push(line.trim().to_string());
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(200)),
+            Err(e) => {
+                log::error!("Failed to wait for FFmpeg (simple): {}", e);
+                wait_error = Some(format!("Failed to wait for FFmpeg: {}", e));
+                break;
             }
         }
     }
+
+    if let Some(ref pid_ref) = child_pid {
+        pid_ref.store(0, Ordering::Release);
+    }
+
+    let (output_log, mut error_lines) = stdout_handle
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
 
     if let Some(handle) = stderr_handle {
         if let Ok(mut stderr_errors) = handle.join() {
             error_lines.append(&mut stderr_errors);
         }
+    }
+
+    if cancelled {
+        return RunResult { success: false, message: "Operation cancelled".to_string() };
+    }
+    if let Some(msg) = wait_error {
+        return RunResult { success: false, message: msg };
     }
 
     match child.wait() {

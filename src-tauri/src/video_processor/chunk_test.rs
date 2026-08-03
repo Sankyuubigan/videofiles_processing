@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use log::{warn, info, error};
 use crate::config::get_codecs;
@@ -13,6 +13,7 @@ pub struct AutoCrfResult {
     pub crf: Option<i32>,
     pub best_vmaf: f64,
     pub target_vmaf: f64,
+    pub cancelled: bool,
 }
 
 pub fn find_best_crf(
@@ -21,13 +22,14 @@ pub fn find_best_crf(
     cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     force_vfr_fix: bool,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> AutoCrfResult {
     let default_crf = get_codecs().get(codec).map(|c| c.crf_default).unwrap_or(22);
     let settings = crate::settings::load_settings();
     info!("Auto CRF: vmaf_ignore_noise={}", settings.vmaf_ignore_noise);
     let video_info = match get_full_video_info(input_path) {
         Ok(i) => i,
-        Err(_) => return AutoCrfResult { crf: Some(default_crf), best_vmaf: 0.0, target_vmaf },
+        Err(_) => return AutoCrfResult { crf: Some(default_crf), best_vmaf: 0.0, target_vmaf, cancelled: false },
     };
     let video_type = &video_info.video_type;
     let width = video_info.width;
@@ -38,7 +40,7 @@ pub fn find_best_crf(
         Some(c) => c.clone(),
         None => match codecs.get("libx264") {
             Some(c) => c.clone(),
-            None => return AutoCrfResult { crf: Some(22), best_vmaf: 0.0, target_vmaf },
+            None => return AutoCrfResult { crf: Some(22), best_vmaf: 0.0, target_vmaf, cancelled: false },
         },
     };
     let mut crf_low = codec_info.crf_min;
@@ -71,6 +73,7 @@ pub fn find_best_crf(
     let mut min_diff = f64::MAX;
     let mut best_crf_acceptable = -1;
     let mut best_vmaf_acceptable = 0.0_f64;
+    let mut cancelled = false;
     let temp_dir = std::env::temp_dir();
 
     let effective_target = match video_type {
@@ -93,9 +96,15 @@ pub fn find_best_crf(
             let result = encode_chunk(
                 input_path, &chunk_str, *ts, chunk_duration,
                 codec, mid_crf, preset_value, use_hardware, &video_info, video_type, force_vfr_fix, cancel_flag.clone(),
+                child_pid.clone(),
             );
             if !result.success {
-                warn!("Auto CRF: encode failed for chunk {} at CRF {}: {}", i, mid_crf, result.message);
+                if cancel_flag.load(Ordering::Relaxed) {
+                    info!("Auto CRF: search cancelled during chunk {} at CRF {}", i, mid_crf);
+                    cancelled = true;
+                } else {
+                    warn!("Auto CRF: encode failed for chunk {} at CRF {}: {}", i, mid_crf, result.message);
+                }
                 break;
             }
             let qr = quality_check::check_quality(
@@ -104,6 +113,7 @@ pub fn find_best_crf(
                 vmaf_subsample, width, height, &video_info,
                 force_vfr_fix, pad_applied, settings.vmaf_ignore_noise,
                 target_vmaf, target_ssimulacra2, cancel_flag.clone(),
+                child_pid.clone(),
                 None,
             );
             if let Err(e) = std::fs::remove_file(&chunk_path) {
@@ -112,7 +122,12 @@ pub fn find_best_crf(
             match qr {
                 Ok(r) => {
                     if r.score < 0.0 {
-                        error!("Auto CRF: {} failed for chunk {} at CRF {} (score={})", r.metric, i, mid_crf, r.score);
+                        if cancel_flag.load(Ordering::Relaxed) {
+                            info!("Auto CRF: search cancelled during {} for chunk {} at CRF {}", r.metric, i, mid_crf);
+                            cancelled = true;
+                        } else {
+                            error!("Auto CRF: {} failed for chunk {} at CRF {} (score={})", r.metric, i, mid_crf, r.score);
+                        }
                         metric_failed = true;
                         break;
                     }
@@ -120,7 +135,12 @@ pub fn find_best_crf(
                     quality_scores.push(r.score);
                 }
                 Err(e) => {
-                    error!("Auto CRF: quality check error for chunk {} at CRF {}: {}", i, mid_crf, e);
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        info!("Auto CRF: search cancelled during quality check for chunk {} at CRF {}", i, mid_crf);
+                        cancelled = true;
+                    } else {
+                        error!("Auto CRF: quality check error for chunk {} at CRF {}: {}", i, mid_crf, e);
+                    }
                     metric_failed = true;
                     break;
                 }
@@ -128,7 +148,9 @@ pub fn find_best_crf(
         }
 
         if metric_failed || quality_scores.is_empty() {
-            warn!("Auto CRF: quality metric failed at step {}, aborting search", step + 1);
+            if !cancelled {
+                warn!("Auto CRF: quality metric failed at step {}, aborting search", step + 1);
+            }
             break;
         }
         let avg_score = quality_scores.iter().sum::<f64>() / quality_scores.len() as f64;
@@ -152,6 +174,11 @@ pub fn find_best_crf(
         }
     }
 
+    if cancelled {
+        warn!("Auto CRF: search cancelled, no CRF selected");
+        return AutoCrfResult { crf: None, best_vmaf: best_vmaf_closest, target_vmaf, cancelled: true };
+    }
+
     let (final_crf, best_vmaf) = if best_crf_acceptable != -1 {
         (Some(best_crf_acceptable), best_vmaf_acceptable)
     } else {
@@ -170,7 +197,7 @@ pub fn find_best_crf(
         }
     }
 
-    AutoCrfResult { crf: final_crf, best_vmaf, target_vmaf }
+    AutoCrfResult { crf: final_crf, best_vmaf, target_vmaf, cancelled }
 }
 
 pub struct ChunkTestResult {
@@ -190,6 +217,7 @@ pub fn run_chunk_test(
     auto_crf: bool, target_vmaf: f64, target_ssimulacra2: f64, force_vfr_fix: bool,
     force_metric: Option<String>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
+    child_pid: Option<Arc<AtomicU32>>,
 ) -> Result<ChunkTestResult, String> {
     let mut actual_crf = crf_value;
     let settings = crate::settings::load_settings();
@@ -200,7 +228,10 @@ pub fn run_chunk_test(
 
     if auto_crf {
         info!("Chunk Test: Auto CRF enabled, target VMAF={}", target_vmaf);
-        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix);
+        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix, child_pid.clone());
+        if acrf.cancelled {
+            return Err("Operation cancelled".to_string());
+        }
         actual_crf = acrf.crf.unwrap_or_else(|| {
             warn!("Chunk Test: Auto CRF target unreachable, using fallback CRF (best score: {:.1})", acrf.best_vmaf);
             crf_value
@@ -254,6 +285,7 @@ pub fn run_chunk_test(
         let result = encode_chunk(
             input_path, &out_str, *ts, chunk_duration,
             codec, actual_crf, preset_value, use_hardware, &video_info, video_type, force_vfr_fix, cancel_flag.clone(),
+            child_pid.clone(),
         );
         encode_time_total += start.elapsed().as_secs_f64();
 
@@ -269,6 +301,7 @@ pub fn run_chunk_test(
                     vmaf_subsample, width, height, &video_info,
                     force_vfr_fix, pad_applied, settings.vmaf_ignore_noise,
                     target_vmaf, target_ssimulacra2, cancel_flag.clone(),
+                    child_pid.clone(),
                     force_metric.clone(),
                 );
                 match qr {

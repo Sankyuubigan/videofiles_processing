@@ -119,7 +119,11 @@ pub fn compress_video(
             }
             return Err(reason);
         }
-        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix);
+        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix, child_pid.clone());
+        if acrf.cancelled {
+            warn!("Auto CRF cancelled for {}", input_path);
+            return Err("Operation cancelled".to_string());
+        }
         match acrf.crf {
             Some(crf) => {
                 actual_crf = crf;
