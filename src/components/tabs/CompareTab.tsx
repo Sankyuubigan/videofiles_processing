@@ -117,6 +117,7 @@ export default function CompareTab({ addLog, isActive }: Props) {
     if (el) {
       console.log(`[CompareTab] Video ${side} loaded, duration:`, el.duration);
       if (side === 'a') setDuration(el.duration);
+      else setDuration(prev => (prev > 0 ? prev : el.duration));
     }
   };
 
@@ -150,22 +151,61 @@ export default function CompareTab({ addLog, isActive }: Props) {
     else setErrorB(msg);
   };
 
-  const togglePlay = () => {
+  const togglePlay = useCallback(async () => {
     const leader = leaderRef.current;
-    const follower = followerRef.current;
     if (!leader) return;
-    
-    if (isPlaying) {
-      leader.pause();
-      if (follower) follower.pause();
-    } else {
-      leader.play().catch((e) => {
+
+    if (leader.paused) {
+      try {
+        await leader.play();
+      } catch (e) {
         console.error('[CompareTab] Play error:', e);
-      });
-      if (follower) follower.play().catch(() => {});
+        addLog(`Compare play error: ${e}`);
+      }
+    } else {
+      leader.pause();
     }
-    setIsPlaying(!isPlaying);
-  };
+  }, [addLog]);
+
+  const seekBy = useCallback((deltaSec: number) => {
+    const leader = leaderRef.current;
+    if (!leader || !isFinite(leader.duration) || leader.duration <= 0) return;
+    const target = Math.min(Math.max(leader.currentTime + deltaSec, 0), leader.duration);
+    leader.currentTime = target;
+    const follower = followerRef.current;
+    if (follower) follower.currentTime = target;
+    setCurrentTime(target);
+  }, []);
+
+  const togglePlayRef = useRef(togglePlay);
+  togglePlayRef.current = togglePlay;
+  const seekByRef = useRef(seekBy);
+  seekByRef.current = seekBy;
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlayRef.current();
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        seekByRef.current(5);
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        seekByRef.current(-5);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isActive]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const time = parseFloat(e.target.value);
@@ -206,6 +246,7 @@ export default function CompareTab({ addLog, isActive }: Props) {
             <video
               ref={leaderRef}
               src={getVideoSrc(fileA)}
+              preload="auto"
               onLoadedMetadata={() => handleLoadedMetadata('a')}
               onTimeUpdate={handleTimeUpdate}
               onPlay={() => setIsPlaying(true)}
@@ -232,6 +273,7 @@ export default function CompareTab({ addLog, isActive }: Props) {
             <video
               ref={followerRef}
               src={getVideoSrc(fileB)}
+              preload="auto"
               onLoadedMetadata={() => handleLoadedMetadata('b')}
               onError={(e) => handleError('b', e)}
               muted

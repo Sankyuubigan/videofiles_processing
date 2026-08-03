@@ -30,7 +30,7 @@ function App() {
   const [crfValue, setCrfValue] = useState(22);
   const [autoCrf, setAutoCrf] = useState(true);
   const [targetVmaf, setTargetVmaf] = useState(90.0);
-  const [targetSsimulacra2, setTargetSsimulacra2] = useState(72.0);
+  const [targetSsimulacra2, setTargetSsimulacra2] = useState(77.0);
   const [forceVfrFix, setForceVfrFix] = useState(false);
   const [operationTab, setOperationTab] = useState<OperationTab>('compress');
 
