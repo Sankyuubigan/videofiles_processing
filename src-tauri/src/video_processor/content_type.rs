@@ -88,7 +88,7 @@ pub fn clear_override(input_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn get_override(input_path: &str) -> Option<VideoType> {
+pub(crate) fn get_override(input_path: &str) -> Option<VideoType> {
     let canonical = canonicalize(input_path);
     load_overrides().get(&canonical).cloned()
 }

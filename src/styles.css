@@ -68,6 +68,20 @@ body { margin: 0; overflow: hidden; }
 
 .file-table .video-type-select { font-size: 13px; padding: 1px 4px; border: 1px solid #ccc; border-radius: 3px; background: #fff; cursor: pointer; }
 
+.type-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ccc;
+  border-top-color: #1a73e8;
+  border-radius: 50%;
+  animation: type-spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+@keyframes type-spin {
+  to { transform: rotate(360deg); }
+}
+
 .action-btn { padding: 2px 8px; cursor: pointer; border: 1px solid #ccc; border-radius: 3px; background: #fff; font-size: 12px; }
 .action-btn:hover { background: #e8e8e8; }
 .action-btn.test { background: #e3f2fd; border-color: #1a73e8; }

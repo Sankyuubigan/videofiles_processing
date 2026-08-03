@@ -13,6 +13,7 @@ use log::{info, warn};
 use commands::file_commands::FileQueueState;
 use commands::compress_commands::ProcessingState;
 use ffmpeg::stream_server::StreamState;
+use video_processor::analyzer::Analyzer;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -27,6 +28,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(FileQueueState::default())
         .manage(ProcessingState::default())
+        .manage(Analyzer::default())
         .manage(StreamState { port: stream_port })
         .setup(|app| {
             let handle = app.handle().clone();

@@ -14,6 +14,14 @@ use crate::video_processor::content_type::detect_content_type;
 use crate::commands::file_commands::TestResult;
 
 pub fn get_full_video_info(input_path: &str) -> Result<VideoInfo, String> {
+    let mut info = get_video_info_basic(input_path)?;
+    let video_type = detect_content_type(input_path, info.duration);
+    info!("Content type for {}: {:?}", input_path, video_type);
+    info.video_type = video_type;
+    Ok(info)
+}
+
+pub fn get_video_info_basic(input_path: &str) -> Result<VideoInfo, String> {
     let input_path_owned = input_path.to_string();
 
     let handle_info = std::thread::spawn({
@@ -30,14 +38,11 @@ pub fn get_full_video_info(input_path: &str) -> Result<VideoInfo, String> {
     info!("CRF for {}: {:?}", input_path, crf_value);
 
     let (complexity_score, complexity_desc) = estimate_video_complexity(&info);
-    let video_type = detect_content_type(input_path, info.duration);
-    info!("Content type for {}: {:?}", input_path, video_type);
 
     info.processing_mode = if info.gpu_info.contains("Available GPUs") { "GPU" } else { "CPU" }.to_string();
     info.complexity_score = complexity_score;
     info.complexity_desc = complexity_desc;
     info.crf_value = crf_value;
-    info.video_type = video_type;
     Ok(info)
 }
 

@@ -5,3 +5,4 @@ pub mod normalize;
 pub mod extract_frame;
 pub mod content_type;
 pub mod quality_check;
+pub mod analyzer;

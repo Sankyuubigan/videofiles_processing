@@ -36,6 +36,8 @@ export interface FileEntry {
   path: string;
   info: VideoInfo | null;
   test_result: TestResult | null;
+  analysis_state: 'pending' | 'probing' | 'detecting' | 'done' | 'failed';
+  error?: string | null;
 }
 
 export interface TestResult {

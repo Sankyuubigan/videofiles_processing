@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
-import { TabId, OperationTab } from './types';
+import { TabId, OperationTab, FileEntry } from './types';
 import { CODECS, OUTPUT_FORMATS } from './constants/codecs';
 import { useFileQueue } from './hooks/useFileQueue';
 import { useSettings } from './hooks/useSettings';
@@ -106,6 +106,9 @@ function App() {
         if (e.payload.success) {
           setFiles(prev => prev.filter(f => f.path !== e.payload.path));
         }
+      }));
+      unlisteners.push(await listen<FileEntry>('file-entry-updated', (e) => {
+        setFiles(prev => prev.map(f => f.path === e.payload.path ? e.payload : f));
       }));
     };
     setup();

@@ -51,6 +51,7 @@ function getEstTimeDisplay(info: FileEntry): string {
 }
 
 function getVideoTypeDisplay(info: FileEntry): { text: string; class: string } {
+  if (info.analysis_state === 'failed') return { text: 'Error', class: 'cell-red' };
   const vt = info.info?.video_type;
   if (!vt) return { text: '--', class: '' };
   switch (vt) {
@@ -59,6 +60,10 @@ function getVideoTypeDisplay(info: FileEntry): { text: string; class: string } {
     case 'Rendered': return { text: 'Rendered', class: 'cell-purple' };
     default: return { text: vt, class: '' };
   }
+}
+
+function isAnalyzing(info: FileEntry): boolean {
+  return info.analysis_state === 'pending' || info.analysis_state === 'probing' || info.analysis_state === 'detecting';
 }
 
 export default function FileTable({ files, selectedIndex, onSelect, onRemove, onTest, onVideoTypeChange }: Props) {
@@ -105,8 +110,10 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
               <td title={file.path}>{name}</td>
               <td>{file.info ? formatFileSize(file.info.size_mb) : '--'}</td>
               <td>{file.info ? formatDuration(file.info.duration) : '--'}</td>
-              <td className={typeDisp.class}>
-                {file.info ? (
+              <td className={typeDisp.class} title={file.error || undefined}>
+                {isAnalyzing(file) ? (
+                  <span className="type-spinner" title="Detecting content type..." />
+                ) : file.info ? (
                   <select
                     className="video-type-select"
                     value={file.info.video_type}
