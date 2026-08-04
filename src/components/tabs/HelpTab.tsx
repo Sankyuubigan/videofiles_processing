@@ -33,18 +33,6 @@ export default function HelpTab() {
         <li>{t('help.skip_crf_ge')}</li>
       </ul>
       <p>{t('help.skip_reported')}</p>
-
-      <h2>{t('help.support_title')}</h2>
-      <p>{t('help.support_desc')}</p>
-      <p>
-        <a
-          href="https://interesting-knowledges.vercel.app/docs/otblagodarit-avtora.-pomosch-proektam"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {t('help.support_link')}
-        </a>
-      </p>
     </div>
   );
 }

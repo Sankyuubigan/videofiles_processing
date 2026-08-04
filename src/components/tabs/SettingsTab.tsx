@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { getVersion } from '@tauri-apps/api/app';
 import { Settings } from '../../types';
 import { t, setLocale, Locale } from '../../i18n';
 
@@ -13,10 +14,15 @@ interface Props {
 
 export default function SettingsTab({ settings, ffmpegExists, onSave, onDownloadFfmpeg }: Props) {
   const [localSettings, setLocalSettings] = useState<Settings>({ ...settings });
+  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   useEffect(() => {
     setLocalSettings({ ...settings });
   }, [settings]);
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion('?'));
+  }, []);
 
   const autoSave = useCallback((updated: Settings) => {
     setLocalSettings(updated);
@@ -173,6 +179,32 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
             </div>
           )}
         </div>
+      </div>
+
+      <div className="settings-group">
+        <h3>{t('settings.about_title')}</h3>
+        <div className="settings-row">
+          <label>{t('settings.about_name')}</label>
+          <span>VideoFilePro</span>
+        </div>
+        <div className="settings-row">
+          <label>{t('settings.about_version')}</label>
+          <span>{appVersion ?? '...'}</span>
+        </div>
+      </div>
+
+      <div className="settings-group">
+        <h3>{t('settings.support_title')}</h3>
+        <p>{t('settings.support_desc')}</p>
+        <p>
+          <a
+            href="https://interesting-knowledges.vercel.app/docs/otblagodarit-avtora.-pomosch-proektam"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {t('settings.support_link')}
+          </a>
+        </p>
       </div>
     </div>
   );

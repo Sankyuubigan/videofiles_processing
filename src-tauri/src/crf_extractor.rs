@@ -166,16 +166,3 @@ pub fn get_crf_from_file(file_path: &str) -> Option<f64> {
     debug!("CRF not found for {}", file_path);
     None
 }
-
-pub fn format_crf_display(crf_value: Option<f64>) -> String {
-    match crf_value {
-        Some(v) => {
-            if v == (v as i64) as f64 {
-                format!("{}", v as i64)
-            } else {
-                format!("{:.1}", v)
-            }
-        }
-        None => "none".to_string(),
-    }
-}

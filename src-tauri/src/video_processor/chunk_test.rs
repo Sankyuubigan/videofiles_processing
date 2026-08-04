@@ -12,7 +12,6 @@ use crate::video_processor::quality_check;
 pub struct AutoCrfResult {
     pub crf: Option<i32>,
     pub best_vmaf: f64,
-    pub target_vmaf: f64,
     pub cancelled: bool,
 }
 
@@ -30,7 +29,7 @@ pub fn find_best_crf(
         Ok(i) => i,
         Err(e) => {
             error!("Auto CRF: failed to probe video {}: {}", input_path, e);
-            return AutoCrfResult { crf: None, best_vmaf: 0.0, target_vmaf, cancelled: false };
+            return AutoCrfResult { crf: None, best_vmaf: 0.0, cancelled: false };
         }
     };
     let video_type = &video_info.video_type;
@@ -44,7 +43,7 @@ pub fn find_best_crf(
             Some(c) => c.clone(),
             None => {
                 error!("Auto CRF: codec '{}' not found and no libx264 fallback", codec);
-                return AutoCrfResult { crf: None, best_vmaf: 0.0, target_vmaf, cancelled: false };
+                return AutoCrfResult { crf: None, best_vmaf: 0.0, cancelled: false };
             }
         },
     };
@@ -181,7 +180,7 @@ pub fn find_best_crf(
 
     if cancelled {
         warn!("Auto CRF: search cancelled, no CRF selected");
-        return AutoCrfResult { crf: None, best_vmaf: best_vmaf_closest, target_vmaf, cancelled: true };
+        return AutoCrfResult { crf: None, best_vmaf: best_vmaf_closest, cancelled: true };
     }
 
     let (final_crf, best_vmaf) = if best_crf_acceptable != -1 {
@@ -202,11 +201,10 @@ pub fn find_best_crf(
         }
     }
 
-    AutoCrfResult { crf: final_crf, best_vmaf, target_vmaf, cancelled }
+    AutoCrfResult { crf: final_crf, best_vmaf, cancelled }
 }
 
 pub struct ChunkTestResult {
-    pub file_path: String,
     pub test_diff: String,
     pub test_est_size: String,
     pub test_est_time: String,
@@ -369,7 +367,6 @@ pub fn run_chunk_test(
     log::info!("Chunk Test finished for {}: diff={}, est size={}, {}={:.1}", input_path, diff_str, format!("{:.1} MB", est_size_mb), used_metric, avg_score);
 
     Ok(ChunkTestResult {
-        file_path: input_path.to_string(),
         test_diff: diff_str,
         test_est_size: format!("{:.1} MB", est_size_mb),
         test_est_time: format_duration(est_time_sec),

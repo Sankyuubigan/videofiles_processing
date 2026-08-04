@@ -10,9 +10,6 @@ use crate::ffmpeg::core::run_command_simple;
 pub struct QualityCheckResult {
     pub score: f64,
     pub metric: String,
-    pub passed: bool,
-    pub target: f64,
-    pub inference_ms: Option<u64>,
 }
 
 pub fn check_quality(
@@ -53,9 +50,6 @@ pub fn check_quality(
         Ok(QualityCheckResult {
             score,
             metric: "SSIMULACRA2".to_string(),
-            passed,
-            target: target_ssimulacra2,
-            inference_ms: None,
         })
     } else {
         info!("Quality check: using VMAF (model vmaf_v0.6.1neg)");
@@ -73,9 +67,6 @@ pub fn check_quality(
         Ok(QualityCheckResult {
             score,
             metric: "VMAF".to_string(),
-            passed,
-            target: target_vmaf,
-            inference_ms: None,
         })
     }
 }

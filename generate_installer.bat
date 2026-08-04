@@ -23,6 +23,17 @@ set CMAKE_C_COMPILER_LAUNCHER=
 set RUSTC_WRAPPER=
 set CARGO_BUILD_RUSTC_WRAPPER=
 
+REM Sync version (YY.M.P) across tauri.conf.json, Cargo.toml, package.json
+echo Syncing version (YY.M.P)...
+set "APP_VERSION="
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\sync_version.ps1"`) do set "APP_VERSION=%%V"
+if not defined APP_VERSION (
+    echo [ERROR] Version sync failed
+    pause >nul
+    exit /b 1
+)
+echo Version: %APP_VERSION%
+
 REM Install npm dependencies if needed
 if not exist "node_modules" (
     echo Installing npm dependencies...

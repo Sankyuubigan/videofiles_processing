@@ -77,17 +77,6 @@ pub fn set_override(input_path: &str, video_type: &VideoType) -> Result<(), Stri
     Ok(())
 }
 
-/// Remove a manual content type override for a file path.
-pub fn clear_override(input_path: &str) -> Result<(), String> {
-    let mut overrides = load_overrides();
-    let canonical = canonicalize(input_path);
-    if overrides.remove(&canonical).is_some() {
-        save_overrides(&overrides)?;
-        info!("Content type override cleared for {}", canonical);
-    }
-    Ok(())
-}
-
 pub(crate) fn get_override(input_path: &str) -> Option<VideoType> {
     let canonical = canonicalize(input_path);
     load_overrides().get(&canonical).cloned()

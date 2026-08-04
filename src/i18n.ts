@@ -74,6 +74,12 @@ const translations: Record<Locale, Record<string, string>> = {
     'settings.skip_min_diff': 'Min size reduction:',
     'settings.skip_min_crf': 'Skip if original CRF >=',
     'settings.vmaf_ignore_noise': 'Ignore Noise/Grain in VMAF',
+    'settings.about_title': 'About',
+    'settings.about_name': 'Name:',
+    'settings.about_version': 'Version:',
+    'settings.support_title': 'Support the Project',
+    'settings.support_desc': 'This project is developed by a single author. If the app is useful to you, you can thank the author and support the project:',
+    'settings.support_link': 'Thank the author. Support the project →',
 
     // Logs
     'logs.no_logs': 'No logs yet...',
@@ -114,9 +120,6 @@ const translations: Record<Locale, Record<string, string>> = {
     'help.skip_min_size': 'Min size reduction — skips a file if the estimated size reduction is less than this percentage (default 5%). If compressing won\'t save much space, there\'s no point.',
     'help.skip_crf_ge': 'Skip if original CRF >= — skips a file if its original CRF is already at or above this value (default 18). Such videos are already well compressed and further compression would only waste time and reduce quality.',
     'help.skip_reported': 'Skipped files are reported in the progress bar with a "SKIP" message explaining the reason.',
-    'help.support_title': 'Support the Project',
-    'help.support_desc': 'This project is developed by a single author. If the app is useful to you, you can thank the author and support the project:',
-    'help.support_link': 'Thank the author. Support the project →',
   },
   ru: {
     // Tabs
@@ -191,6 +194,12 @@ const translations: Record<Locale, Record<string, string>> = {
     'settings.skip_min_diff': 'Мин. уменьшение размера:',
     'settings.skip_min_crf': 'Пропускать если CRF оригинала >=',
     'settings.vmaf_ignore_noise': 'Игнорировать шум/зерно в VMAF',
+    'settings.about_title': 'О программе',
+    'settings.about_name': 'Название:',
+    'settings.about_version': 'Версия:',
+    'settings.support_title': 'Поддержка проекта',
+    'settings.support_desc': 'Проект развивается одним автором. Если приложение вам полезно — вы можете отблагодарить автора, это поможет проекту:',
+    'settings.support_link': 'Отблагодарить автора. Помощь проекту →',
 
     // Logs
     'logs.no_logs': 'Пока нет логов...',
@@ -231,9 +240,6 @@ const translations: Record<Locale, Record<string, string>> = {
     'help.skip_min_size': 'Мин. уменьшение размера — файл пропускается, если расчётное уменьшение размера меньше этого процента (по умолчанию 5%). Если сжатие почти не экономит место, оно не имеет смысла.',
     'help.skip_crf_ge': 'Пропускать если CRF оригинала >= — файл пропускается, если его исходный CRF уже равен или больше этого значения (по умолчанию 18). Такие видео уже хорошо сжаты, дальнейшее сжатие только зря потратит время и ухудшит качество.',
     'help.skip_reported': 'Пропущенные файлы отмечаются в прогрессбаре сообщением «SKIP» с указанием причины.',
-    'help.support_title': 'Поддержка проекта',
-    'help.support_desc': 'Проект развивается одним автором. Если приложение вам полезно — вы можете отблагодарить автора, это поможет проекту:',
-    'help.support_link': 'Отблагодарить автора. Помощь проекту →',
   },
 };
 
