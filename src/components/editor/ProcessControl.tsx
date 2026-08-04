@@ -5,6 +5,7 @@ interface Props {
   isProcessing: boolean;
   isPaused: boolean;
   hasFiles: boolean;
+  currentFile: string | null;
   onStart: () => void;
   onBatchTest: () => void;
   onBatchCompress: () => void;
@@ -13,7 +14,11 @@ interface Props {
   onResume: () => void;
 }
 
-export default function ProcessControl({ progress, isProcessing, isPaused, hasFiles, onStart, onBatchTest, onBatchCompress, onCancel, onPause, onResume }: Props) {
+function fileBaseName(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+export default function ProcessControl({ progress, isProcessing, isPaused, hasFiles, currentFile, onStart, onBatchTest, onBatchCompress, onCancel, onPause, onResume }: Props) {
   return (
     <div className="process-control">
       <button className="btn-start" disabled={!hasFiles || isProcessing} onClick={onStart}>
@@ -38,6 +43,11 @@ export default function ProcessControl({ progress, isProcessing, isPaused, hasFi
         <div className="progress-bar">
           <div className={`progress-bar-fill ${isPaused ? 'paused' : ''}`} style={{ width: `${progress.percent}%` }} />
         </div>
+        {currentFile && (
+          <div className="progress-file" title={currentFile}>
+            {t('process.file')} {fileBaseName(currentFile)}
+          </div>
+        )}
         <div className="progress-label">{isPaused ? t('process.paused') : progress.message}</div>
       </div>
     </div>

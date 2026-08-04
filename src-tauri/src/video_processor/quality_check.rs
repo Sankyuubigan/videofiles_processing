@@ -4,7 +4,7 @@ use log::{info, warn};
 use image::GenericImageView;
 
 use crate::ffmpeg::probe::VideoType;
-use crate::ffmpeg::encode::calculate_vmaf;
+use crate::ffmpeg::encode::{calculate_vmaf, chunk_timeline};
 use crate::ffmpeg::core::run_command_simple;
 
 pub struct QualityCheckResult {
@@ -44,7 +44,8 @@ pub fn check_quality(
         info!("Quality check: using SSIMULACRA2");
         let score = calculate_ssimulacra2(
             original_path, encoded_path, start_time, duration,
-            width, height, force_vfr_fix, ignore_noise, cancel_flag, child_pid,
+            width, height, force_vfr_fix, ignore_noise, video_info,
+            cancel_flag, child_pid,
         )?;
         let passed = score >= target_ssimulacra2;
         info!("Quality check: SSIMULACRA2={:.1} (target > {:.1}) {}",
@@ -86,8 +87,9 @@ fn calculate_ssimulacra2(
     duration: f64,
     width: usize,
     height: usize,
-    _force_vfr_fix: bool,
+    force_vfr_fix: bool,
     ignore_noise: bool,
+    video_info: &crate::ffmpeg::probe::VideoInfo,
     cancel_flag: Arc<AtomicBool>,
     child_pid: Option<Arc<AtomicU32>>,
 ) -> Result<f64, String> {
@@ -99,8 +101,12 @@ fn calculate_ssimulacra2(
     let orig_str = orig_ppm.to_string_lossy().to_string();
     let dist_str = dist_ppm.to_string_lossy().to_string();
 
-    let orig_timestamp = start_time + if duration > 0.0 { duration / 2.0 } else { 0.0 };
-    extract_frame_for_ssim(original_path, &orig_str, orig_timestamp, width, height, ignore_noise, cancel_flag.clone(), child_pid.clone())?;
+    let needs_fix = force_vfr_fix || video_info.needs_vfr_fix;
+    extract_source_reference_frame(
+        original_path, &orig_str, start_time, duration,
+        width, height, needs_fix, ignore_noise,
+        cancel_flag.clone(), child_pid.clone(),
+    )?;
 
     let encoded_timestamp = if duration > 0.0 { duration / 2.0 } else { 0.0 };
     extract_frame_for_ssim(encoded_path, &dist_str, encoded_timestamp, width, height, ignore_noise, cancel_flag.clone(), child_pid)?;
@@ -137,6 +143,88 @@ fn calculate_ssimulacra2(
     Ok(score)
 }
 
+fn build_ssim_grade_filters(
+    orig_width: usize,
+    orig_height: usize,
+    ignore_noise: bool,
+) -> Vec<String> {
+    let mut vf_filters = Vec::new();
+
+    // Мощный фильтр для игнора 3D CGI рендер-шума (убивает микротекстуры, оставляет макро-структуру)
+    if ignore_noise {
+        vf_filters.push("hqdn3d=12:9:14:12,gblur=sigma=0.6".to_string());
+    }
+
+    // Возвращаем спасительный даунскейл (скорость + низкочастотный фильтр для человеческого зрения)
+    if orig_width > 1280 {
+        vf_filters.push("scale=1280:-1:flags=bicubic".to_string());
+    } else if orig_width > 0 && orig_height > 0 {
+        vf_filters.push(format!("scale={}:{}", orig_width, orig_height));
+    } else {
+        vf_filters.push("scale=-1:720:flags=bicubic".to_string());
+    }
+
+    vf_filters
+}
+
+fn extend_color_force(cmd: &mut Vec<String>) {
+    // Битый VUI у некоторых файлов несёт prim:reserved/trc:reserved, из-за чего swscaler
+    // падает с -129 при конвертации в rgb24. Принудительно выставляем bt709 на входе.
+    cmd.extend([
+        "-color_primaries".to_string(), "bt709".to_string(),
+        "-color_trc".to_string(), "bt709".to_string(),
+        "-colorspace".to_string(), "bt709".to_string(),
+    ]);
+}
+
+fn extract_source_reference_frame(
+    input_path: &str,
+    output_path: &str,
+    source_start: f64,
+    duration: f64,
+    orig_width: usize,
+    orig_height: usize,
+    needs_fix: bool,
+    ignore_noise: bool,
+    cancel_flag: Arc<AtomicBool>,
+    child_pid: Option<Arc<AtomicU32>>,
+) -> Result<(), String> {
+    // Reference-кадр берём из ТОЙ ЖЕ цепочки, что кодируется чанк (trim+setpts),
+    // чтобы обе стороны сидели на одной нормализованной тайм-линии (фикс рассинхрона VFR).
+    let (fast_seek, trim_start) = chunk_timeline(source_start);
+
+    let mut vf_filters = vec![
+        format!("trim=start={:.3}:duration={:.3}", trim_start, duration),
+        "setpts=PTS-STARTPTS".to_string(),
+    ];
+    if needs_fix {
+        vf_filters.push(format!("fps={}", crate::config::DEFAULT_FPS_FIX));
+    }
+    vf_filters.extend(build_ssim_grade_filters(orig_width, orig_height, ignore_noise));
+
+    let mut cmd = vec![
+        "ffmpeg".to_string(), "-y".to_string(),
+        "-ss".to_string(), format!("{:.3}", fast_seek),
+    ];
+    extend_color_force(&mut cmd);
+    cmd.extend(["-i".to_string(), input_path.to_string()]);
+    cmd.extend(["-vf".to_string(), vf_filters.join(",")]);
+    cmd.extend([
+        "-ss".to_string(), format!("{:.3}", duration / 2.0),
+        "-frames:v".to_string(), "1".to_string(),
+        "-pix_fmt".to_string(), "rgb24".to_string(),
+        output_path.to_string(),
+    ]);
+
+    let result = run_command_simple(&cmd, cancel_flag, child_pid);
+
+    if !result.success {
+        return Err(format!("ffmpeg frame extraction failed: {}", result.message));
+    }
+
+    Ok(())
+}
+
 fn extract_frame_for_ssim(
     input_path: &str,
     output_path: &str,
@@ -166,8 +254,9 @@ fn extract_frame_for_ssim(
     let mut cmd = vec![
         "ffmpeg".to_string(), "-y".to_string(),
         "-ss".to_string(), format!("{:.3}", timestamp),
-        "-i".to_string(), input_path.to_string(),
     ];
+    extend_color_force(&mut cmd);
+    cmd.extend(["-i".to_string(), input_path.to_string()]);
 
     if !vf_filters.is_empty() {
         cmd.extend(["-vf".to_string(), vf_filters.join(",")]);

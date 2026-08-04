@@ -58,6 +58,7 @@ pub fn run() {
             commands::file_commands::get_file_list,
             commands::file_commands::set_output_dir,
             commands::file_commands::get_output_dir,
+            commands::file_commands::clear_output_dir,
             commands::file_commands::clear_queue,
             commands::file_commands::set_video_type,
             commands::compress_commands::start_compress,
@@ -78,6 +79,7 @@ pub fn run() {
             commands::info_commands::get_video_details,
             commands::info_commands::get_gpu_info_cmd,
             commands::compare_commands::get_stream_url,
+            commands::preview_commands::generate_preview_gif_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

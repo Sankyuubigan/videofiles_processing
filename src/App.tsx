@@ -21,6 +21,7 @@ function App() {
   const [progress, setProgress] = useState({ percent: 0, message: 'Ready' });
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [currentFile, setCurrentFile] = useState<string | null>(null);
 
   // Editor state
   const [selectedFormat, setSelectedFormat] = useState('mp4');
@@ -37,6 +38,7 @@ function App() {
   const { files, setFiles, selectedIndex, setSelectedIndex, addFiles, removeFile, refreshFiles, clearQueue } = useFileQueue();
   const { settings, ffmpegExists, saveSettings, checkFfmpeg, downloadFfmpeg } = useSettings();
   const [outputDir, setOutputDir] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ filePath: string; gifPath: string | null; error: string | null } | null>(null);
 
   // Sync locale from settings
   useEffect(() => {
@@ -57,6 +59,8 @@ function App() {
     const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
     setLogs(prev => [...prev, `[${ts}] ${msg}`]);
   }, []);
+
+  const clearLogs = useCallback(() => setLogs([]), []);
 
   const handleFileDrop = useCallback((paths: string[], _position: { x: number; y: number }) => {
     addLog(`Dropped ${paths.length} file(s)`);
@@ -80,14 +84,19 @@ function App() {
         const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
         setLogs(prev => [...prev, `[${ts}] ${e.payload}`]);
       }));
+      unlisteners.push(await listen<string>('current-file', (e) => {
+        setCurrentFile(e.payload);
+      }));
       unlisteners.push(await listen('compress-finished', () => {
         setIsProcessing(false);
         setIsPaused(false);
+        setCurrentFile(null);
         setProgress({ percent: 100, message: 'Done!' });
       }));
       unlisteners.push(await listen('batch-finished', () => {
         setIsProcessing(false);
         setIsPaused(false);
+        setCurrentFile(null);
         setProgress({ percent: 100, message: 'Batch done!' });
         refreshFiles();
       }));
@@ -101,6 +110,7 @@ function App() {
       }));
       unlisteners.push(await listen('batch-test-finished', () => {
         setProgress({ percent: 100, message: 'Batch test done!' });
+        setCurrentFile(null);
       }));
       unlisteners.push(await listen<{ path: string; success: boolean }>('file-done', (e) => {
         if (e.payload.success) {
@@ -133,6 +143,33 @@ function App() {
       setOutputDir(dir);
     }
   }, []);
+
+  const handleResetOutputDir = useCallback(async () => {
+    try {
+      await tauriInvoke('clear_output_dir');
+      setOutputDir(null);
+    } catch (e: any) {
+      addLog(`Reset output dir error: ${e}`);
+    }
+  }, [addLog]);
+
+  const handlePreviewGif = useCallback(async (path: string) => {
+    if (!path) return;
+    setCurrentFile(path);
+    setIsProcessing(true);
+    setPreview({ filePath: path, gifPath: null, error: null });
+    try {
+      const gifPath = await tauriInvoke<string>('generate_preview_gif_cmd', { path });
+      setPreview({ filePath: path, gifPath, error: null });
+    } catch (e: any) {
+      addLog(`Preview error: ${e}`);
+      setPreview({ filePath: path, gifPath: null, error: String(e) });
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [addLog]);
+
+  const closePreview = useCallback(() => setPreview(null), []);
 
   const handleStartCompress = useCallback(async () => {
     if (selectedIndex < 0 || selectedIndex >= files.length) return;
@@ -186,6 +223,7 @@ function App() {
       await tauriInvoke('cancel_processing');
       setIsProcessing(false);
       setIsPaused(false);
+      setCurrentFile(null);
       setProgress({ percent: 0, message: 'Cancelled' });
     } catch (e) {
       console.error('cancel error:', e);
@@ -393,14 +431,19 @@ function App() {
             onExtractFrame={handleExtractFrame}
             filesCount={files.length}
             outputDir={outputDir}
+            onResetOutputDir={handleResetOutputDir}
             onClearTable={clearQueue}
+            onPreview={handlePreviewGif}
+            currentFile={currentFile}
+            preview={preview}
+            onClosePreview={closePreview}
           />
         </div>
         <div style={{ display: activeTab === 'compare' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
           <CompareTab addLog={addLog} isActive={activeTab === 'compare'} />
         </div>
         <div style={{ display: activeTab === 'logs' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
-          <LogsTab logs={logs} />
+          <LogsTab logs={logs} onClear={clearLogs} />
         </div>
         <div style={{ display: activeTab === 'settings' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
           <SettingsTab

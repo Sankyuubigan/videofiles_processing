@@ -67,3 +67,9 @@ export type Locale = 'en' | 'ru';
 
 export type TabId = 'editor' | 'compare' | 'logs' | 'settings' | 'help';
 export type OperationTab = 'compress' | 'trim' | 'normalize';
+
+export interface PreviewState {
+  filePath: string;
+  gifPath: string | null;
+  error: string | null;
+}

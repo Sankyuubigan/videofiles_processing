@@ -1,13 +1,11 @@
 import { FileEntry } from '../../types';
 import { formatFileSize, formatDuration } from '../../constants/codecs';
-import { t } from '../../i18n';
 
 interface Props {
   files: FileEntry[];
   selectedIndex: number;
   onSelect: (i: number) => void;
   onRemove: (path: string) => void;
-  onTest: (path: string, forceMetric?: string) => void;
   onVideoTypeChange: (path: string, videoType: string) => void;
 }
 
@@ -57,7 +55,7 @@ function getVideoTypeDisplay(info: FileEntry): { text: string; class: string } {
   switch (vt) {
     case 'Animation': return { text: 'Animation', class: 'cell-yellow' };
     case 'LiveAction': return { text: 'LiveAction', class: 'cell-green' };
-    case 'Rendered': return { text: 'Rendered', class: 'cell-purple' };
+    case 'Rendered': return { text: 'Rendered', class: 'cell-blue' };
     default: return { text: vt, class: '' };
   }
 }
@@ -66,7 +64,7 @@ function isAnalyzing(info: FileEntry): boolean {
   return info.analysis_state === 'pending' || info.analysis_state === 'probing' || info.analysis_state === 'detecting';
 }
 
-export default function FileTable({ files, selectedIndex, onSelect, onRemove, onTest, onVideoTypeChange }: Props) {
+export default function FileTable({ files, selectedIndex, onSelect, onRemove, onVideoTypeChange }: Props) {
   if (files.length === 0) {
     return (
       <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>
@@ -135,9 +133,6 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
               <td>{estTime}</td>
               <td>
                 <div className="action-btn-group">
-                  <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(file.path); }}>{t('table.auto_test')}</button>
-                  <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(file.path, 'VMAF'); }}>{t('table.test_vmaf')}</button>
-                  <button className="action-btn test" onClick={(e) => { e.stopPropagation(); onTest(file.path, 'SSIMULACRA2'); }}>{t('table.test_ssim')}</button>
                   <button className="action-btn delete" onClick={(e) => { e.stopPropagation(); onRemove(file.path); }}>x</button>
                 </div>
               </td>

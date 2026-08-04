@@ -6,6 +6,12 @@ use super::core::{run_command_with_progress, run_command_simple, RunResult};
 use super::probe::{get_gpu_info, VideoType};
 use crate::config::DEFAULT_FPS_FIX;
 
+pub fn chunk_timeline(source_start: f64) -> (f64, f64) {
+    let fast_seek = (source_start - 10.0).max(0.0);
+    let trim_start = source_start - fast_seek;
+    (fast_seek, trim_start)
+}
+
 fn get_content_type_flags(video_type: &VideoType, codec: &str, use_hardware: bool, has_nvenc: bool) -> Vec<String> {
     let mut flags = Vec::new();
 
@@ -212,8 +218,7 @@ pub fn encode_chunk(
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
     
-    let fast_seek = (start_time - 10.0).max(0.0);
-    let trim_start = start_time - fast_seek;
+    let (fast_seek, trim_start) = chunk_timeline(start_time);
 
     let mut cmd = vec![
         "ffmpeg".to_string(), "-y".to_string(), 
@@ -283,12 +288,11 @@ pub fn calculate_vmaf(
     let json_path = tmp_dir.join(&json_filename);
     let json_path_ff = json_path.to_string_lossy().replace('\\', "/").replace(':', "\\:");
 
-    let fast_seek = (start_time - 10.0).max(0.0);
-    let trim_start = start_time - fast_seek;
+    let (fast_seek, trim_start) = chunk_timeline(start_time);
 
     let needs_fix = force_vfr_fix || video_info.needs_vfr_fix;
 
-    let mut ref_filters = format!("trim=start={:.3}:duration={:.3},setpts=PTS-STARTPTS", trim_start, duration);
+    let mut ref_filters = format!("setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,trim=start={:.3}:duration={:.3},setpts=PTS-STARTPTS", trim_start, duration);
     if needs_fix {
         ref_filters.push_str(&format!(",fps={}", crate::config::DEFAULT_FPS_FIX));
     }

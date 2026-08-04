@@ -54,6 +54,7 @@ pub async fn run_chunk_test_cmd(
     let path_for_log = path.clone();
     let cancel = proc_state.cancel_flag.clone();
     let child_pid = proc_state.current_child_pid.clone();
+    let _ = app.emit("current-file", path_for_log.clone());
     let progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>> = {
         let app = app.clone();
         Some(Arc::new(move |percent: i32, message: String| {
@@ -143,6 +144,7 @@ pub async fn run_batch_test(
 
     for (i, file) in files_vec.iter().enumerate() {
         if proc_state.cancel_flag.load(Ordering::Relaxed) { break; }
+        let _ = app.emit("current-file", file.path.clone());
         let cancel = proc_state.cancel_flag.clone();
         let child_pid = proc_state.current_child_pid.clone();
         let path = file.path.clone();

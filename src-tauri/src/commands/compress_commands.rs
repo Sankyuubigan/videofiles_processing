@@ -78,6 +78,7 @@ pub async fn start_compress(
 
     info!("Starting compress: {} -> {} ({}, crf={}, preset={})", path, output_format, codec, crf_value, preset_value);
 
+    let _ = app.emit("current-file", path.clone());
     let path_for_log = path.clone();
     let cancel = proc_state.cancel_flag.clone();
     let app_clone = app.clone();
@@ -189,6 +190,8 @@ pub async fn start_batch_compress(
             if proc_state.cancel_flag.load(Ordering::Relaxed) { break; }
         }
         if proc_state.cancel_flag.load(Ordering::Relaxed) { break; }
+
+        let _ = app.emit("current-file", file.path.clone());
 
         let cancel = proc_state.cancel_flag.clone();
         let app_clone = app.clone();

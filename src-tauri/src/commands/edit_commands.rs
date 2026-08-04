@@ -33,6 +33,7 @@ pub async fn trim_video_cmd(
     let file_path_for_log = file_path.clone();
     let cancel = proc_state.cancel_flag.clone();
     let app2 = app.clone();
+    let _ = app.emit("current-file", file_path_for_log.clone());
     let result = tokio::task::spawn_blocking(move || {
         let progress_cb = {
             let app = app2.clone();
@@ -86,6 +87,7 @@ pub async fn normalize_audio_cmd(
     let file_path_for_log = file_path.clone();
     let cancel = proc_state.cancel_flag.clone();
     let app2 = app.clone();
+    let _ = app.emit("current-file", file_path_for_log.clone());
     let result = tokio::task::spawn_blocking(move || {
         let progress_cb = {
             let app = app2.clone();

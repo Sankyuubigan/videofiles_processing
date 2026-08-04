@@ -130,6 +130,18 @@ pub fn get_output_dir(state: State<FileQueueState>) -> Result<Option<String>, St
 }
 
 #[tauri::command]
+pub fn clear_output_dir(state: State<FileQueueState>) -> Result<(), String> {
+    info!("clear_output_dir");
+    let mut dir = state.output_dir.lock().map_err(|e| {
+        let msg = format!("Failed to lock output dir: {}", e);
+        error!("{}", msg);
+        msg
+    })?;
+    *dir = None;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_video_type(path: String, video_type: String, state: State<FileQueueState>) -> Result<(), String> {
     let parsed = match video_type.as_str() {
         "Animation" => crate::ffmpeg::probe::VideoType::Animation,

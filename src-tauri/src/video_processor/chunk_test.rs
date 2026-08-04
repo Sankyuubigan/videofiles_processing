@@ -24,12 +24,14 @@ pub fn find_best_crf(
     force_vfr_fix: bool,
     child_pid: Option<Arc<AtomicU32>>,
 ) -> AutoCrfResult {
-    let default_crf = get_codecs().get(codec).map(|c| c.crf_default).unwrap_or(22);
     let settings = crate::settings::load_settings();
     info!("Auto CRF: vmaf_ignore_noise={}", settings.vmaf_ignore_noise);
     let video_info = match get_full_video_info(input_path) {
         Ok(i) => i,
-        Err(_) => return AutoCrfResult { crf: Some(default_crf), best_vmaf: 0.0, target_vmaf, cancelled: false },
+        Err(e) => {
+            error!("Auto CRF: failed to probe video {}: {}", input_path, e);
+            return AutoCrfResult { crf: None, best_vmaf: 0.0, target_vmaf, cancelled: false };
+        }
     };
     let video_type = &video_info.video_type;
     let width = video_info.width;
@@ -40,7 +42,10 @@ pub fn find_best_crf(
         Some(c) => c.clone(),
         None => match codecs.get("libx264") {
             Some(c) => c.clone(),
-            None => return AutoCrfResult { crf: Some(22), best_vmaf: 0.0, target_vmaf, cancelled: false },
+            None => {
+                error!("Auto CRF: codec '{}' not found and no libx264 fallback", codec);
+                return AutoCrfResult { crf: None, best_vmaf: 0.0, target_vmaf, cancelled: false };
+            }
         },
     };
     let mut crf_low = codec_info.crf_min;
@@ -232,10 +237,13 @@ pub fn run_chunk_test(
         if acrf.cancelled {
             return Err("Operation cancelled".to_string());
         }
-        actual_crf = acrf.crf.unwrap_or_else(|| {
-            warn!("Chunk Test: Auto CRF target unreachable, using fallback CRF (best score: {:.1})", acrf.best_vmaf);
-            crf_value
-        });
+        actual_crf = match acrf.crf {
+            Some(crf) => crf,
+            None => {
+                warn!("Chunk Test: Auto CRF target unreachable (best score: {:.1}), aborting", acrf.best_vmaf);
+                return Err(format!("Auto CRF target unreachable (best score: {:.1})", acrf.best_vmaf));
+            }
+        };
         info!("Chunk Test: Auto CRF selected CRF {}", actual_crf);
     }
 

@@ -13,6 +13,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'editor.select_files': '1. Select video files',
     'editor.select_btn': 'Select file(s)',
     'editor.output_dir': 'Output dir',
+    'editor.reset_output_dir': 'Reset',
     'editor.output_dir_default': 'same as source',
     'editor.clear_table': 'Clear table',
     'editor.in_queue': 'In queue: {count} files',
@@ -37,6 +38,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'process.pause': 'Pause',
     'process.resume': 'Resume',
     'process.paused': 'Paused',
+    'process.file': 'File:',
 
     // Compare
     'compare.select_left': 'Select left video',
@@ -77,6 +79,14 @@ const translations: Record<Locale, Record<string, string>> = {
     'logs.no_logs': 'No logs yet...',
     'logs.copy': 'Copy',
     'logs.copied': 'Copied!',
+    'logs.clear': 'Clear',
+
+    // Preview
+    'preview.gif': 'Thumbnails',
+    'preview.title': 'Video thumbnails',
+    'preview.generating': 'Generating thumbnails...',
+    'preview.close': 'Close',
+    'preview.usage': '5 random 3s clips from the middle of the video',
 
     // Help
     'help.columns': 'File Table Columns',
@@ -120,6 +130,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'editor.select_files': '1. Выберите видеофайлы',
     'editor.select_btn': 'Выбрать файл(ы)',
     'editor.output_dir': 'Папка вывода',
+    'editor.reset_output_dir': 'Сброс',
     'editor.output_dir_default': 'рядом с исходным',
     'editor.clear_table': 'Очистить таблицу',
     'editor.in_queue': 'В очереди: {count} файлов',
@@ -144,6 +155,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'process.pause': 'Пауза',
     'process.resume': 'Продолжить',
     'process.paused': 'Приостановлено',
+    'process.file': 'Файл:',
 
     // Compare
     'compare.select_left': 'Выбрать левое видео',
@@ -184,6 +196,14 @@ const translations: Record<Locale, Record<string, string>> = {
     'logs.no_logs': 'Пока нет логов...',
     'logs.copy': 'Копировать',
     'logs.copied': 'Скопировано!',
+    'logs.clear': 'Очистить',
+
+    // Preview
+    'preview.gif': 'Миниатюры',
+    'preview.title': 'Миниатюры видео',
+    'preview.generating': 'Генерация миниатюр...',
+    'preview.close': 'Закрыть',
+    'preview.usage': '5 случайных нарезок по 3 сек из середины видео',
 
     // Help
     'help.columns': 'Колонки таблицы',

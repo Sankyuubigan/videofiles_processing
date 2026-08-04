@@ -28,6 +28,8 @@ interface Props {
   onTrim: (path: string, seconds: number, fromStart: boolean) => void;
   onNormalize: (path: string) => void;
   onExtractFrame: (path: string, frame: number) => void;
+  onTest: (path: string, forceMetric?: string) => void;
+  onPreview: (path: string) => void;
   isProcessing: boolean;
 }
 
@@ -130,6 +132,37 @@ export default function OperationTabs(props: Props) {
                 VFR: {props.selectedFile.info.needs_vfr_fix ? 'Needs fix' : 'OK'}
               </span>
             )}
+          </div>
+          <div className="op-row test-row">
+            <label>Test / preview:</label>
+            <button
+              className="action-btn test"
+              disabled={!props.selectedFile || props.isProcessing}
+              onClick={() => props.selectedFile && props.onTest(props.selectedFile.path)}
+            >
+              {t('table.auto_test')}
+            </button>
+            <button
+              className="action-btn test"
+              disabled={!props.selectedFile || props.isProcessing}
+              onClick={() => props.selectedFile && props.onTest(props.selectedFile.path, 'VMAF')}
+            >
+              {t('table.test_vmaf')}
+            </button>
+            <button
+              className="action-btn test"
+              disabled={!props.selectedFile || props.isProcessing}
+              onClick={() => props.selectedFile && props.onTest(props.selectedFile.path, 'SSIMULACRA2')}
+            >
+              {t('table.test_ssim')}
+            </button>
+            <button
+              className="action-btn preview"
+              disabled={!props.selectedFile || props.isProcessing}
+              onClick={() => props.selectedFile && props.onPreview(props.selectedFile.path)}
+            >
+              {t('preview.gif')}
+            </button>
           </div>
         </div>
       )}

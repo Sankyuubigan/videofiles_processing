@@ -1,8 +1,9 @@
-import { FileEntry, OperationTab } from '../../types';
+import { FileEntry, OperationTab, PreviewState } from '../../types';
 import { t } from '../../i18n';
 import FileTable from '../editor/FileTable';
 import OperationTabs from '../editor/OperationTabs';
 import ProcessControl from '../editor/ProcessControl';
+import PreviewModal from '../editor/PreviewModal';
 
 interface Props {
   files: FileEntry[];
@@ -11,6 +12,7 @@ interface Props {
   isDragOver: boolean;
   onSelectFiles: () => void;
   onSelectOutputDir: () => void;
+  onResetOutputDir: () => void;
   onRemoveFile: (path: string) => void;
   onTestFile: (path: string, forceMetric?: string) => void;
   onVideoTypeChange: (path: string, videoType: string) => void;
@@ -49,6 +51,10 @@ interface Props {
   filesCount: number;
   outputDir: string | null;
   onClearTable: () => void;
+  onPreview: (path: string) => void;
+  currentFile: string | null;
+  preview: PreviewState | null;
+  onClosePreview: () => void;
 }
 
 export default function EditorTab(props: Props) {
@@ -59,6 +65,9 @@ export default function EditorTab(props: Props) {
           <label>{t('editor.select_files')}</label>
           <button className="action-btn" onClick={props.onSelectFiles}>{t('editor.select_btn')}</button>
           <button className="action-btn" onClick={props.onSelectOutputDir}>{t('editor.output_dir')}</button>
+          <button className="action-btn" onClick={props.onResetOutputDir} disabled={!props.outputDir}>
+            {t('editor.reset_output_dir')}
+          </button>
           {props.outputDir && (
             <span className="output-dir-label" title={props.outputDir}>
               {props.outputDir.length > 40 ? '...' + props.outputDir.slice(-37) : props.outputDir}
@@ -80,7 +89,6 @@ export default function EditorTab(props: Props) {
             selectedIndex={props.selectedIndex}
             onSelect={props.setSelectedIndex}
             onRemove={props.onRemoveFile}
-            onTest={props.onTestFile}
             onVideoTypeChange={props.onVideoTypeChange}
           />
         </div>
@@ -110,6 +118,8 @@ export default function EditorTab(props: Props) {
         onTrim={props.onTrim}
         onNormalize={props.onNormalize}
         onExtractFrame={props.onExtractFrame}
+        onTest={props.onTestFile}
+        onPreview={props.onPreview}
         isProcessing={props.isProcessing}
       />
       <ProcessControl
@@ -117,6 +127,7 @@ export default function EditorTab(props: Props) {
         isProcessing={props.isProcessing}
         isPaused={props.isPaused}
         hasFiles={props.filesCount > 0}
+        currentFile={props.currentFile}
         onStart={props.onStartCompress}
         onBatchTest={props.onBatchTest}
         onBatchCompress={props.onBatchCompress}
@@ -124,6 +135,12 @@ export default function EditorTab(props: Props) {
         onPause={props.onPause}
         onResume={props.onResume}
       />
+      {props.preview && (
+        <PreviewModal
+          preview={props.preview}
+          onClose={props.onClosePreview}
+        />
+      )}
     </div>
   );
 }
