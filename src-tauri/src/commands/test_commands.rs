@@ -4,9 +4,55 @@ use tauri::{AppHandle, Emitter, State};
 use log::{error, warn};
 
 use crate::commands::file_commands::{FileQueueState, TestResult};
-use crate::video_processor::chunk_test::run_chunk_test;
+use crate::video_processor::chunk_test::{run_chunk_test, ChunkTestResult};
 
 use super::compress_commands::ProcessingState;
+
+fn ok_test_result(r: ChunkTestResult) -> TestResult {
+    TestResult {
+        test_diff: r.test_diff,
+        test_est_size: r.test_est_size,
+        test_est_time: r.test_est_time,
+        test_vmaf: r.test_vmaf,
+        is_profitable: r.is_profitable,
+        test_crf: r.test_crf,
+        metric: r.metric,
+        error: None,
+    }
+}
+
+fn failed_test_result(error: String) -> TestResult {
+    TestResult {
+        test_diff: String::new(),
+        test_est_size: String::new(),
+        test_est_time: String::new(),
+        test_vmaf: -1.0,
+        is_profitable: false,
+        test_crf: -1,
+        metric: String::new(),
+        error: Some(error),
+    }
+}
+
+fn record_result(app: &AppHandle, queue_state: &FileQueueState, path: &str, result: TestResult) {
+    let entry = {
+        let mut files = match queue_state.files.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                error!("Failed to lock file queue for {}: {}", path, e);
+                return;
+            }
+        };
+        match files.iter_mut().find(|e| e.path == path) {
+            Some(entry) => {
+                entry.test_result = Some(result);
+                entry.clone()
+            }
+            None => return,
+        }
+    };
+    let _ = app.emit("file-entry-updated", entry);
+}
 
 #[tauri::command]
 pub async fn run_chunk_test_cmd(
@@ -80,24 +126,13 @@ pub async fn run_chunk_test_cmd(
 
     match result {
         Ok(r) => {
-            let test_result = TestResult {
-                test_diff: r.test_diff,
-                test_est_size: r.test_est_size,
-                test_est_time: r.test_est_time,
-                test_vmaf: r.test_vmaf,
-                is_profitable: r.is_profitable,
-                test_crf: r.test_crf,
-                metric: r.metric,
-            };
-            if let Ok(mut files) = queue_state.files.lock() {
-                if let Some(entry) = files.iter_mut().find(|e| e.path == path_for_log) {
-                    entry.test_result = Some(test_result.clone());
-                }
-            }
+            let test_result = ok_test_result(r);
+            record_result(&app, &queue_state, &path_for_log, test_result.clone());
             Ok(test_result)
         }
         Err(e) => {
             error!("Chunk test failed for {}: {}", path_for_log, e);
+            record_result(&app, &queue_state, &path_for_log, failed_test_result(e.clone()));
             Err(e)
         }
     }
@@ -167,24 +202,13 @@ pub async fn run_batch_test(
 
         match result {
             Ok(r) => {
-                let test_result = TestResult {
-                    test_diff: r.test_diff,
-                    test_est_size: r.test_est_size,
-                    test_est_time: r.test_est_time,
-                    test_vmaf: r.test_vmaf,
-                    is_profitable: r.is_profitable,
-                    test_crf: r.test_crf,
-                    metric: r.metric,
-                };
-                if let Ok(mut files) = queue_state.files.lock() {
-                    if let Some(entry) = files.get_mut(i) {
-                        entry.test_result = Some(test_result.clone());
-                    }
-                }
+                let test_result = ok_test_result(r);
+                record_result(&app, &queue_state, &file.path, test_result.clone());
                 results.push(test_result);
             }
             Err(e) => {
                 error!("Error testing file {}: {}", file.path, e);
+                record_result(&app, &queue_state, &file.path, failed_test_result(e));
             }
         }
     }

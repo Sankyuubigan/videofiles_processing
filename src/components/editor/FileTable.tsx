@@ -28,12 +28,17 @@ function getVfrDisplay(info: FileEntry): { text: string; class: string } {
 }
 
 function getEstSizeDisplay(info: FileEntry): { text: string; class: string } {
-  if (!info.test_result) return { text: '--', class: '' };
+  if (!info.test_result || info.test_result.error) return { text: '--', class: '' };
   const profitable = info.test_result.is_profitable;
   return { text: `${info.test_result.test_est_size} (${info.test_result.test_diff})`, class: profitable ? 'cell-green' : 'cell-red' };
 }
 
-function getVmafDisplay(info: FileEntry): { text: string; class: string } {
+function shorten(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max - 3) + '...' : text;
+}
+
+function getVmafDisplay(info: FileEntry): { text: string; class: string; title?: string } {
+  if (info.test_result?.error) return { text: shorten(info.test_result.error, 40), class: 'cell-red', title: info.test_result.error };
   if (!info.test_result) return { text: '--', class: '' };
   const vmaf = info.test_result.test_vmaf;
   if (vmaf === -2.0) return { text: 'No metric', class: 'cell-gray' };
@@ -44,7 +49,7 @@ function getVmafDisplay(info: FileEntry): { text: string; class: string } {
 }
 
 function getEstTimeDisplay(info: FileEntry): string {
-  if (!info.test_result) return '--';
+  if (!info.test_result || info.test_result.error) return '--';
   return info.test_result.test_est_time;
 }
 
@@ -129,7 +134,7 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
               <td className={crfDisp.class}>{crfDisp.text}</td>
               <td className={vfrDisp.class}>{vfrDisp.text}</td>
               <td className={estSizeDisp.class}>{estSizeDisp.text}</td>
-              <td className={vmafDisp.class}>{vmafDisp.text}</td>
+              <td className={vmafDisp.class} title={vmafDisp.title}>{vmafDisp.text}</td>
               <td>{estTime}</td>
               <td>
                 <div className="action-btn-group">

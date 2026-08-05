@@ -1,11 +1,12 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::AtomicBool;
 use log::{info, warn};
 use image::GenericImageView;
 
 use crate::ffmpeg::probe::VideoType;
 use crate::ffmpeg::encode::{calculate_vmaf, chunk_timeline};
 use crate::ffmpeg::core::run_command_simple;
+use crate::process_control::PidTracker;
 
 pub struct QualityCheckResult {
     pub score: f64,
@@ -28,7 +29,7 @@ pub fn check_quality(
     target_vmaf: f64,
     target_ssimulacra2: f64,
     cancel_flag: Arc<AtomicBool>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
     metric_override: Option<String>,
 ) -> Result<QualityCheckResult, String> {
     let use_ssim = match metric_override.as_deref() {
@@ -82,7 +83,7 @@ fn calculate_ssimulacra2(
     ignore_noise: bool,
     video_info: &crate::ffmpeg::probe::VideoInfo,
     cancel_flag: Arc<AtomicBool>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> Result<f64, String> {
     let tmp_dir = std::env::temp_dir();
     let ts_ms = (start_time * 1000.0) as u64;
@@ -95,7 +96,7 @@ fn calculate_ssimulacra2(
     let needs_fix = force_vfr_fix || video_info.needs_vfr_fix;
     extract_source_reference_frame(
         original_path, &orig_str, start_time, duration,
-        width, height, needs_fix, ignore_noise,
+        width, height, needs_fix, video_info.vfr_fix_fps, ignore_noise,
         cancel_flag.clone(), child_pid.clone(),
     )?;
 
@@ -176,20 +177,22 @@ fn extract_source_reference_frame(
     orig_width: usize,
     orig_height: usize,
     needs_fix: bool,
+    fix_fps: f64,
     ignore_noise: bool,
     cancel_flag: Arc<AtomicBool>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> Result<(), String> {
     // Reference-кадр берём из ТОЙ ЖЕ цепочки, что кодируется чанк (trim+setpts),
     // чтобы обе стороны сидели на одной нормализованной тайм-линии (фикс рассинхрона VFR).
     let (fast_seek, trim_start) = chunk_timeline(source_start);
 
     let mut vf_filters = vec![
+        "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709".to_string(),
         format!("trim=start={:.3}:duration={:.3}", trim_start, duration),
         "setpts=PTS-STARTPTS".to_string(),
     ];
     if needs_fix {
-        vf_filters.push(format!("fps={}", crate::config::DEFAULT_FPS_FIX));
+        vf_filters.push(format!("fps={}", fix_fps));
     }
     vf_filters.extend(build_ssim_grade_filters(orig_width, orig_height, ignore_noise));
 
@@ -224,9 +227,9 @@ fn extract_frame_for_ssim(
     orig_height: usize,
     ignore_noise: bool,
     cancel_flag: Arc<AtomicBool>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> Result<(), String> {
-    let mut vf_filters = Vec::new();
+    let mut vf_filters = vec!["setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709".to_string()];
     
     // Мощный фильтр для игнора 3D CGI рендер-шума (убивает микротекстуры, оставляет макро-структуру)
     if ignore_noise {

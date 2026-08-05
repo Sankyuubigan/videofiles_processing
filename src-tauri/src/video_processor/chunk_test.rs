@@ -1,18 +1,24 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::{warn, info, error};
 use crate::config::get_codecs;
 use crate::estimator::format_duration;
 use crate::ffmpeg::encode::encode_chunk;
 use crate::ffmpeg::probe::VideoType;
+use crate::process_control::PidTracker;
 use crate::video_processor::compress::get_full_video_info;
+use crate::video_processor::parallel_chunks::{
+    effective_workers, grade_chunk, log_worker_panic, run_parallel, StepChunkOutcome, test_chunk,
+};
 use crate::video_processor::quality_check;
 
 pub struct AutoCrfResult {
     pub crf: Option<i32>,
+    pub best_crf: Option<i32>,
     pub best_vmaf: f64,
     pub cancelled: bool,
+    pub metric_error: Option<String>,
 }
 
 pub fn find_best_crf(
@@ -21,7 +27,7 @@ pub fn find_best_crf(
     cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     force_vfr_fix: bool,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> AutoCrfResult {
     let settings = crate::settings::load_settings();
     info!("Auto CRF: vmaf_ignore_noise={}", settings.vmaf_ignore_noise);
@@ -29,7 +35,7 @@ pub fn find_best_crf(
         Ok(i) => i,
         Err(e) => {
             error!("Auto CRF: failed to probe video {}: {}", input_path, e);
-            return AutoCrfResult { crf: None, best_vmaf: 0.0, cancelled: false };
+            return AutoCrfResult { crf: None, best_crf: None, best_vmaf: 0.0, cancelled: false, metric_error: None };
         }
     };
     let video_type = &video_info.video_type;
@@ -43,7 +49,7 @@ pub fn find_best_crf(
             Some(c) => c.clone(),
             None => {
                 error!("Auto CRF: codec '{}' not found and no libx264 fallback", codec);
-                return AutoCrfResult { crf: None, best_vmaf: 0.0, cancelled: false };
+                return AutoCrfResult { crf: None, best_crf: None, best_vmaf: 0.0, cancelled: false, metric_error: None };
             }
         },
     };
@@ -72,12 +78,15 @@ pub fn find_best_crf(
         }
     };
 
+    let parallel = settings.parallel_chunks && timestamps.len() > 1;
+
     let mut best_crf_closest = codec_info.crf_default;
     let mut best_vmaf_closest = 0.0_f64;
     let mut min_diff = f64::MAX;
     let mut best_crf_acceptable = -1;
     let mut best_vmaf_acceptable = 0.0_f64;
     let mut cancelled = false;
+    let mut metric_error: Option<String> = None;
     let temp_dir = std::env::temp_dir();
 
     let effective_target = match video_type {
@@ -94,68 +103,136 @@ pub fn find_best_crf(
         let mut quality_scores = Vec::new();
         let mut metric_failed = false;
 
-        for (i, ts) in timestamps.iter().enumerate() {
-            let chunk_path = temp_dir.join(format!("auto_crf_{}_{}_{}.mkv", std::process::id(), chrono::Utc::now().timestamp(), i));
-            let chunk_str = chunk_path.to_string_lossy().to_string();
-            let result = encode_chunk(
-                input_path, &chunk_str, *ts, chunk_duration,
-                codec, mid_crf, preset_value, use_hardware, &video_info, video_type, force_vfr_fix, cancel_flag.clone(),
-                child_pid.clone(),
-            );
-            if !result.success {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    info!("Auto CRF: search cancelled during chunk {} at CRF {}", i, mid_crf);
-                    cancelled = true;
-                } else {
-                    warn!("Auto CRF: encode failed for chunk {} at CRF {}: {}", i, mid_crf, result.message);
+        if parallel {
+            let file_stamp = chrono::Utc::now().timestamp_millis();
+            let outcomes = run_parallel(timestamps.len(), effective_workers(timestamps.len(), use_hardware), |i| {
+                let chunk_path = temp_dir.join(format!("auto_crf_{}_{}_{}.mkv", std::process::id(), file_stamp, i));
+                let chunk_str = chunk_path.to_string_lossy().to_string();
+                grade_chunk(
+                    input_path, &chunk_str, timestamps[i], chunk_duration,
+                    codec, mid_crf, preset_value, use_hardware, &video_info, video_type,
+                    vmaf_subsample, width, height, force_vfr_fix, pad_applied,
+                    settings.vmaf_ignore_noise, target_vmaf, target_ssimulacra2,
+                    cancel_flag.clone(),
+                    child_pid.as_ref().map(|t| t.fork()),
+                )
+            });
+
+            for (i, outcome) in outcomes.into_iter().enumerate() {
+                match outcome {
+                    None => {
+                        log_worker_panic(i);
+                        if metric_error.is_none() {
+                            metric_error = Some(format!("chunk worker {} panicked", i + 1));
+                        }
+                        metric_failed = true;
+                    }
+                    Some(StepChunkOutcome::Scored { score, metric }) => {
+                        info!("Auto CRF: chunk {} at CRF {} -> {}={:.2}", i, mid_crf, metric, score);
+                        quality_scores.push(score);
+                    }
+                    Some(StepChunkOutcome::EncodeFailed { message }) => {
+                        warn!("Auto CRF: encode failed for chunk {} at CRF {}: {}", i, mid_crf, message);
+                        if metric_error.is_none() {
+                            metric_error = Some(format!("encode: {}", message));
+                        }
+                        metric_failed = true;
+                    }
+                    Some(StepChunkOutcome::MetricFailed { metric, message }) => {
+                        error!("Auto CRF: {} failed for chunk {} at CRF {}: {}", metric, i, mid_crf, message);
+                        if metric_error.is_none() {
+                            metric_error = Some(format!("{}: {}", metric, message));
+                        }
+                        metric_failed = true;
+                    }
+                    Some(StepChunkOutcome::Cancelled) => {
+                        info!("Auto CRF: search cancelled during chunk {} at CRF {}", i, mid_crf);
+                        cancelled = true;
+                    }
                 }
+            }
+
+            if cancelled {
                 break;
             }
-            let qr = quality_check::check_quality(
-                input_path, &chunk_str, video_type,
-                *ts, chunk_duration,
-                vmaf_subsample, width, height, &video_info,
-                force_vfr_fix, pad_applied, settings.vmaf_ignore_noise,
-                target_vmaf, target_ssimulacra2, cancel_flag.clone(),
-                child_pid.clone(),
-                None,
-            );
-            if let Err(e) = std::fs::remove_file(&chunk_path) {
-                warn!("Failed to remove chunk {:?}: {}", chunk_path, e);
+            if metric_failed || quality_scores.is_empty() {
+                warn!("Auto CRF: quality metric failed at step {}, aborting search", step + 1);
+                break;
             }
-            match qr {
-                Ok(r) => {
-                    if r.score < 0.0 {
+        } else {
+            for (i, ts) in timestamps.iter().enumerate() {
+                let chunk_path = temp_dir.join(format!("auto_crf_{}_{}_{}.mkv", std::process::id(), chrono::Utc::now().timestamp(), i));
+                let chunk_str = chunk_path.to_string_lossy().to_string();
+                let result = encode_chunk(
+                    input_path, &chunk_str, *ts, chunk_duration,
+                    codec, mid_crf, preset_value, use_hardware, &video_info, video_type, force_vfr_fix, cancel_flag.clone(),
+                    child_pid.clone(),
+                );
+                if !result.success {
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        info!("Auto CRF: search cancelled during chunk {} at CRF {}", i, mid_crf);
+                        cancelled = true;
+                    } else {
+                        warn!("Auto CRF: encode failed for chunk {} at CRF {}: {}", i, mid_crf, result.message);
+                        if metric_error.is_none() {
+                            metric_error = Some(format!("encode: {}", result.message));
+                        }
+                        metric_failed = true;
+                    }
+                    break;
+                }
+                let qr = quality_check::check_quality(
+                    input_path, &chunk_str, video_type,
+                    *ts, chunk_duration,
+                    vmaf_subsample, width, height, &video_info,
+                    force_vfr_fix, pad_applied, settings.vmaf_ignore_noise,
+                    target_vmaf, target_ssimulacra2, cancel_flag.clone(),
+                    child_pid.clone(),
+                    None,
+                );
+                if let Err(e) = std::fs::remove_file(&chunk_path) {
+                    warn!("Failed to remove chunk {:?}: {}", chunk_path, e);
+                }
+                match qr {
+                    Ok(r) => {
+                        if r.score < 0.0 {
+                            if cancel_flag.load(Ordering::Relaxed) {
+                                info!("Auto CRF: search cancelled during {} for chunk {} at CRF {}", r.metric, i, mid_crf);
+                                cancelled = true;
+                            } else {
+                                error!("Auto CRF: {} failed for chunk {} at CRF {} (score={})", r.metric, i, mid_crf, r.score);
+                                if metric_error.is_none() {
+                                    metric_error = Some(format!("{}: score={}", r.metric, r.score));
+                                }
+                            }
+                            metric_failed = true;
+                            break;
+                        }
+                        info!("Auto CRF: chunk {} at CRF {} -> {}={:.2}", i, mid_crf, r.metric, r.score);
+                        quality_scores.push(r.score);
+                    }
+                    Err(e) => {
                         if cancel_flag.load(Ordering::Relaxed) {
-                            info!("Auto CRF: search cancelled during {} for chunk {} at CRF {}", r.metric, i, mid_crf);
+                            info!("Auto CRF: search cancelled during quality check for chunk {} at CRF {}", i, mid_crf);
                             cancelled = true;
                         } else {
-                            error!("Auto CRF: {} failed for chunk {} at CRF {} (score={})", r.metric, i, mid_crf, r.score);
+                            error!("Auto CRF: quality check error for chunk {} at CRF {}: {}", i, mid_crf, e);
+                            if metric_error.is_none() {
+                                metric_error = Some(format!("quality check: {}", e));
+                            }
                         }
                         metric_failed = true;
                         break;
                     }
-                    info!("Auto CRF: chunk {} at CRF {} -> {}={:.2}", i, mid_crf, r.metric, r.score);
-                    quality_scores.push(r.score);
-                }
-                Err(e) => {
-                    if cancel_flag.load(Ordering::Relaxed) {
-                        info!("Auto CRF: search cancelled during quality check for chunk {} at CRF {}", i, mid_crf);
-                        cancelled = true;
-                    } else {
-                        error!("Auto CRF: quality check error for chunk {} at CRF {}: {}", i, mid_crf, e);
-                    }
-                    metric_failed = true;
-                    break;
                 }
             }
-        }
 
-        if metric_failed || quality_scores.is_empty() {
-            if !cancelled {
-                warn!("Auto CRF: quality metric failed at step {}, aborting search", step + 1);
+            if metric_failed || quality_scores.is_empty() {
+                if !cancelled {
+                    warn!("Auto CRF: quality metric failed at step {}, aborting search", step + 1);
+                }
+                break;
             }
-            break;
         }
         let avg_score = quality_scores.iter().sum::<f64>() / quality_scores.len() as f64;
         let diff = (avg_score - effective_target).abs();
@@ -180,7 +257,7 @@ pub fn find_best_crf(
 
     if cancelled {
         warn!("Auto CRF: search cancelled, no CRF selected");
-        return AutoCrfResult { crf: None, best_vmaf: best_vmaf_closest, cancelled: true };
+        return AutoCrfResult { crf: None, best_crf: Some(best_crf_closest), best_vmaf: best_vmaf_closest, cancelled: true, metric_error };
     }
 
     let (final_crf, best_vmaf) = if best_crf_acceptable != -1 {
@@ -201,7 +278,7 @@ pub fn find_best_crf(
         }
     }
 
-    AutoCrfResult { crf: final_crf, best_vmaf, cancelled }
+    AutoCrfResult { crf: final_crf, best_crf: Some(best_crf_closest), best_vmaf, cancelled, metric_error }
 }
 
 pub struct ChunkTestResult {
@@ -220,7 +297,7 @@ pub fn run_chunk_test(
     auto_crf: bool, target_vmaf: f64, target_ssimulacra2: f64, force_vfr_fix: bool,
     force_metric: Option<String>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> Result<ChunkTestResult, String> {
     let mut actual_crf = crf_value;
     let settings = crate::settings::load_settings();
@@ -238,8 +315,15 @@ pub fn run_chunk_test(
         actual_crf = match acrf.crf {
             Some(crf) => crf,
             None => {
-                warn!("Chunk Test: Auto CRF target unreachable (best score: {:.1}), aborting", acrf.best_vmaf);
-                return Err(format!("Auto CRF target unreachable (best score: {:.1})", acrf.best_vmaf));
+                let msg = match acrf.metric_error {
+                    Some(err) => format!("Failed (metric error: {})", err),
+                    None => match acrf.best_crf {
+                        Some(bc) => format!("Failed (best result: {} / {:.1})", bc, acrf.best_vmaf),
+                        None => "Failed (video analysis error)".to_string(),
+                    },
+                };
+                warn!("Chunk Test: {}", msg);
+                return Err(msg);
             }
         };
         info!("Chunk Test: Auto CRF selected CRF {}", actual_crf);
@@ -267,6 +351,8 @@ pub fn run_chunk_test(
         }
     };
 
+    let parallel = settings.parallel_chunks && timestamps.len() > 1;
+
     let temp_dir = std::env::temp_dir();
     let mut total_size_bytes: u64 = 0;
     let mut quality_scores = Vec::new();
@@ -279,58 +365,113 @@ pub fn run_chunk_test(
     let progress_start = if auto_crf { 60 } else { 0 };
     let progress_span = 100 - progress_start;
 
-    for (i, ts) in timestamps.iter().enumerate() {
+    if parallel {
+        let file_stamp = chrono::Utc::now().timestamp_millis();
         if let Some(cb) = &progress_cb {
-            let pct = progress_start + ((i as f32 + 1.0) / timestamps.len() as f32 * progress_span as f32) as i32;
-            cb(pct, format!("Chunk {}/{} at CRF {}...", i + 1, timestamps.len(), actual_crf));
+            cb(progress_start, format!("Chunk {}/{} at CRF {}...", 1, timestamps.len(), actual_crf));
         }
-        let out_path = temp_dir.join(format!("chunk_test_{}_{}_{}.mkv", std::process::id(), chrono::Utc::now().timestamp(), i));
-        let out_str = out_path.to_string_lossy().to_string();
+        let outcomes = run_parallel(timestamps.len(), effective_workers(timestamps.len(), use_hardware), |i| {
+            let out_path = temp_dir.join(format!("chunk_test_{}_{}_{}.mkv", std::process::id(), file_stamp, i));
+            let out_str = out_path.to_string_lossy().to_string();
+            test_chunk(
+                input_path, &out_str, timestamps[i], chunk_duration,
+                codec, actual_crf, preset_value, use_hardware, &video_info, video_type,
+                vmaf_subsample, width, height, force_vfr_fix, pad_applied,
+                settings.vmaf_ignore_noise, target_vmaf, target_ssimulacra2,
+                force_metric.clone(), cancel_flag.clone(),
+                child_pid.as_ref().map(|t| t.fork()),
+            )
+        });
 
-        let start = std::time::Instant::now();
-        let result = encode_chunk(
-            input_path, &out_str, *ts, chunk_duration,
-            codec, actual_crf, preset_value, use_hardware, &video_info, video_type, force_vfr_fix, cancel_flag.clone(),
-            child_pid.clone(),
-        );
-        encode_time_total += start.elapsed().as_secs_f64();
-
-        if !result.success {
-            return Err(format!("Error encoding chunk {}: {}", i + 1, result.message));
+        for (i, outcome) in outcomes.into_iter().enumerate() {
+            if let Some(cb) = &progress_cb {
+                let pct = progress_start + ((i as f32 + 1.0) / timestamps.len() as f32 * progress_span as f32) as i32;
+                cb(pct, format!("Chunk {}/{} at CRF {} done", i + 1, timestamps.len(), actual_crf));
+            }
+            let outcome = match outcome {
+                Some(o) => o,
+                None => {
+                    log_worker_panic(i);
+                    return Err(format!("Chunk worker {} panicked", i + 1));
+                }
+            };
+            if let Some(err) = outcome.encode_error {
+                return Err(format!("Error encoding chunk {}: {}", i + 1, err));
+            }
+            encode_time_total += outcome.encode_seconds;
+            total_size_bytes += outcome.size_bytes;
+            if let Some(m) = outcome.metric {
+                used_metric = m;
+            }
+            match outcome.score {
+                Some(s) if s < 0.0 => {
+                    error!("Chunk Test: {} missing, skipping for remaining chunks", used_metric);
+                    metric_missing = true;
+                }
+                Some(s) => {
+                    info!("Chunk Test: chunk {} at CRF {} -> {}={:.2}", i, actual_crf, used_metric, s);
+                    quality_scores.push(s);
+                }
+                None => {}
+            }
+            if let Some(err) = outcome.quality_error {
+                warn!("Chunk Test: quality check error for chunk {}: {}", i, err);
+            }
         }
+    } else {
+        for (i, ts) in timestamps.iter().enumerate() {
+            if let Some(cb) = &progress_cb {
+                let pct = progress_start + ((i as f32 + 1.0) / timestamps.len() as f32 * progress_span as f32) as i32;
+                cb(pct, format!("Chunk {}/{} at CRF {}...", i + 1, timestamps.len(), actual_crf));
+            }
+            let out_path = temp_dir.join(format!("chunk_test_{}_{}_{}.mkv", std::process::id(), chrono::Utc::now().timestamp(), i));
+            let out_str = out_path.to_string_lossy().to_string();
 
-        if out_path.exists() {
-            if !metric_missing {
-                let qr = quality_check::check_quality(
-                    input_path, &out_str, video_type,
-                    *ts, chunk_duration,
-                    vmaf_subsample, width, height, &video_info,
-                    force_vfr_fix, pad_applied, settings.vmaf_ignore_noise,
-                    target_vmaf, target_ssimulacra2, cancel_flag.clone(),
-                    child_pid.clone(),
-                    force_metric.clone(),
-                );
-                match qr {
-                    Ok(r) => {
-                        used_metric = r.metric.clone();
-                        if r.score < 0.0 {
-                            error!("Chunk Test: {} missing, skipping for remaining chunks", r.metric);
-                            metric_missing = true;
-                        } else if r.score >= 0.0 {
-                            info!("Chunk Test: chunk {} at CRF {} -> {}={:.2}", i, actual_crf, r.metric, r.score);
-                            quality_scores.push(r.score);
+            let start = std::time::Instant::now();
+            let result = encode_chunk(
+                input_path, &out_str, *ts, chunk_duration,
+                codec, actual_crf, preset_value, use_hardware, &video_info, video_type, force_vfr_fix, cancel_flag.clone(),
+                child_pid.clone(),
+            );
+            encode_time_total += start.elapsed().as_secs_f64();
+
+            if !result.success {
+                return Err(format!("Error encoding chunk {}: {}", i + 1, result.message));
+            }
+
+            if out_path.exists() {
+                if !metric_missing {
+                    let qr = quality_check::check_quality(
+                        input_path, &out_str, video_type,
+                        *ts, chunk_duration,
+                        vmaf_subsample, width, height, &video_info,
+                        force_vfr_fix, pad_applied, settings.vmaf_ignore_noise,
+                        target_vmaf, target_ssimulacra2, cancel_flag.clone(),
+                        child_pid.clone(),
+                        force_metric.clone(),
+                    );
+                    match qr {
+                        Ok(r) => {
+                            used_metric = r.metric.clone();
+                            if r.score < 0.0 {
+                                error!("Chunk Test: {} missing, skipping for remaining chunks", r.metric);
+                                metric_missing = true;
+                            } else if r.score >= 0.0 {
+                                info!("Chunk Test: chunk {} at CRF {} -> {}={:.2}", i, actual_crf, r.metric, r.score);
+                                quality_scores.push(r.score);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Chunk Test: quality check error for chunk {}: {}", i, e);
                         }
                     }
-                    Err(e) => {
-                        warn!("Chunk Test: quality check error for chunk {}: {}", i, e);
-                    }
                 }
-            }
-            if let Ok(meta) = std::fs::metadata(&out_path) {
-                total_size_bytes += meta.len();
-            }
-            if let Err(e) = std::fs::remove_file(&out_path) {
-                warn!("Failed to remove chunk output {:?}: {}", out_path, e);
+                if let Ok(meta) = std::fs::metadata(&out_path) {
+                    total_size_bytes += meta.len();
+                }
+                if let Err(e) = std::fs::remove_file(&out_path) {
+                    warn!("Failed to remove chunk output {:?}: {}", out_path, e);
+                }
             }
         }
     }

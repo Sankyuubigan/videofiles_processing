@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::AtomicBool;
 use log::{error, warn, info};
 
 use crate::config::COMPRESSED_VIDEO_SUFFIX;
@@ -12,6 +12,7 @@ use crate::settings::Settings;
 use crate::video_processor::chunk_test::find_best_crf;
 use crate::video_processor::content_type::detect_content_type;
 use crate::commands::file_commands::TestResult;
+use crate::process_control::PidTracker;
 
 pub fn get_full_video_info(input_path: &str) -> Result<VideoInfo, String> {
     let mut info = get_video_info_basic(input_path)?;
@@ -57,7 +58,7 @@ pub fn check_auto_skip(
         .unwrap_or_else(|| input_path.to_string());
 
     if settings.skip_min_diff_enabled {
-        if let Some(tr) = test_result {
+        if let Some(tr) = test_result.filter(|t| t.error.is_none()) {
             let diff_str = tr.test_diff.trim();
             let is_reduction = diff_str.starts_with('-');
             if let Ok(diff) = diff_str.trim_start_matches(|c: char| c == '-' || c == '+')
@@ -95,7 +96,7 @@ pub fn compress_video(
     output_dir: Option<&str>,
     auto_crf: bool, target_vmaf: f64, target_ssimulacra2: f64,
     test_result: Option<&TestResult>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> Result<String, String> {
     let input_p = Path::new(input_path);
     let mut actual_crf = crf_value;

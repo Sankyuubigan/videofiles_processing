@@ -1,10 +1,10 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::AtomicBool;
 use log::{info, warn};
 
 use super::core::{run_command_with_progress, run_command_simple, RunResult};
 use super::probe::{get_gpu_info, VideoType};
-use crate::config::DEFAULT_FPS_FIX;
+use crate::process_control::PidTracker;
 
 pub fn chunk_timeline(source_start: f64) -> (f64, f64) {
     let fast_seek = (source_start - 10.0).max(0.0);
@@ -53,7 +53,7 @@ pub fn fix_vfr_target_crf(
     preset_value: &str, duration_seconds: f64, use_hardware: bool, video_info: &super::probe::VideoInfo,
     video_type: &VideoType,
     cancel_flag: Arc<AtomicBool>, progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -62,7 +62,7 @@ pub fn fix_vfr_target_crf(
         cmd.extend(["-hwaccel".to_string(), "cuda".to_string()]);
     }
     cmd.extend(["-i".to_string(), input_path.to_string()]);
-    let mut vf_filters = vec![format!("fps={}", DEFAULT_FPS_FIX)];
+    let mut vf_filters = vec![format!("fps={}", video_info.vfr_fix_fps)];
     
     // Не используем yuv420p для 10-bit источников (потому что цвет оставляем как есть)
     if video_info.is_10bit && codec != "libx265" {
@@ -120,7 +120,7 @@ pub fn compress_video_core(
     preset_value: &str, duration_seconds: f64, video_info: &super::probe::VideoInfo,
     video_type: &VideoType, use_hardware: bool, cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -188,7 +188,7 @@ pub fn compress_video_core_no_subtitles(
     preset_value: &str, duration_seconds: f64, video_info: &super::probe::VideoInfo,
     video_type: &VideoType, use_hardware: bool, cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> RunResult {
     let mut info_clone = video_info.clone();
     info_clone.has_subtitles = false;
@@ -200,7 +200,7 @@ pub fn compress_video_core_full_map(
     preset_value: &str, duration_seconds: f64,
     cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> RunResult {
     let mut cmd = vec!["ffmpeg".to_string(), "-y".to_string(), "-i".to_string(), input_path.to_string()];
     cmd.extend(["-c:v".to_string(), "libx264".to_string(), "-crf".to_string(), crf_value.to_string(), "-preset".to_string(), preset_value.to_string(), "-c:a".to_string(), "aac".to_string(), "-b:a".to_string(), "192k".to_string()]);
@@ -213,7 +213,7 @@ pub fn encode_chunk(
     codec: &str, crf_value: i32, preset_value: &str, use_hardware: bool,
     video_info: &super::probe::VideoInfo, video_type: &VideoType, force_vfr_fix: bool,
     cancel_flag: Arc<AtomicBool>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -234,7 +234,7 @@ pub fn encode_chunk(
     ];
     
     if needs_fix {
-        vf_filters.push(format!("fps={}", DEFAULT_FPS_FIX));
+        vf_filters.push(format!("fps={}", video_info.vfr_fix_fps));
     }
     if video_info.is_10bit && codec != "libx265" {
         vf_filters.push("format=yuv420p".to_string());
@@ -281,7 +281,7 @@ pub fn calculate_vmaf(
     original_path: &str, chunk_path: &str, start_time: f64, duration: f64,
     n_subsample: usize, width: usize, video_info: &super::probe::VideoInfo,
     force_vfr_fix: bool, pad_applied: bool, ignore_noise: bool, cancel_flag: Arc<AtomicBool>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> f64 {
     let tmp_dir = std::env::temp_dir();
     let json_filename = format!("vmaf_{}_{}.json", std::process::id(), chrono::Utc::now().timestamp_millis());
@@ -294,7 +294,7 @@ pub fn calculate_vmaf(
 
     let mut ref_filters = format!("setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,trim=start={:.3}:duration={:.3},setpts=PTS-STARTPTS", trim_start, duration);
     if needs_fix {
-        ref_filters.push_str(&format!(",fps={}", crate::config::DEFAULT_FPS_FIX));
+        ref_filters.push_str(&format!(",fps={}", video_info.vfr_fix_fps));
     }
     
     if pad_applied {

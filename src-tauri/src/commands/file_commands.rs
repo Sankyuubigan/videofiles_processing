@@ -27,6 +27,8 @@ pub struct TestResult {
     pub is_profitable: bool,
     pub test_crf: i32,
     pub metric: String,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Clone)]

@@ -7,3 +7,4 @@ pub mod content_type;
 pub mod quality_check;
 pub mod analyzer;
 pub mod preview_gif;
+pub mod parallel_chunks;

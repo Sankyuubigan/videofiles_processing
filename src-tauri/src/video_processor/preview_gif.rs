@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::AtomicBool;
 use log::{error, warn};
 
 use crate::ffmpeg::core::{run_command_with_progress, RunResult};
+use crate::process_control::PidTracker;
 
 const PREVIEW_SEGMENTS: usize = 5;
 const PREVIEW_SEGMENT_DURATION: f64 = 3.0;
@@ -139,7 +140,7 @@ pub fn generate_preview_gif(
     input_path: &str,
     cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> Result<String, String> {
     let video_info = crate::video_processor::compress::get_video_info_basic(input_path)
         .map_err(|e| {

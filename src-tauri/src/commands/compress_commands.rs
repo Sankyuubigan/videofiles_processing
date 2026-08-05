@@ -1,24 +1,28 @@
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU32, Ordering}};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use tauri::{AppHandle, Emitter, State};
 use log::{info, error, warn};
 
 use crate::commands::file_commands::FileQueueState;
+use crate::process_control::{PidRegistry, PidTracker};
 use crate::video_processor::compress::compress_video;
 
 pub struct ProcessingState {
     pub cancel_flag: Arc<AtomicBool>,
     pub is_processing: Arc<Mutex<bool>>,
     pub is_paused: Arc<AtomicBool>,
-    pub current_child_pid: Arc<AtomicU32>,
+    pub child_pids: PidRegistry,
+    pub current_child_pid: PidTracker,
 }
 
 impl Default for ProcessingState {
     fn default() -> Self {
+        let child_pids = PidRegistry::default();
         Self {
             cancel_flag: Arc::new(AtomicBool::new(false)),
             is_processing: Arc::new(Mutex::new(false)),
             is_paused: Arc::new(AtomicBool::new(false)),
-            current_child_pid: Arc::new(AtomicU32::new(0)),
+            current_child_pid: PidTracker::new(child_pids.clone()),
+            child_pids,
         }
     }
 }
@@ -53,7 +57,7 @@ pub async fn start_compress(
     }
     proc_state.cancel_flag.store(false, Ordering::Relaxed);
     proc_state.is_paused.store(false, Ordering::Relaxed);
-    proc_state.current_child_pid.store(0, Ordering::Release);
+    proc_state.current_child_pid.store(0);
 
     let (path, output_dir, test_result) = {
         let files = queue_state.files.lock().map_err(|e| {
@@ -160,7 +164,7 @@ pub async fn start_batch_compress(
     }
     proc_state.cancel_flag.store(false, Ordering::Relaxed);
     proc_state.is_paused.store(false, Ordering::Relaxed);
-    proc_state.current_child_pid.store(0, Ordering::Release);
+    proc_state.current_child_pid.store(0);
 
     let (files_vec, output_dir) = {
         let files = queue_state.files.lock().map_err(|e| {
@@ -224,7 +228,7 @@ pub async fn start_batch_compress(
             msg
         })?;
 
-        proc_state.current_child_pid.store(0, Ordering::Release);
+        proc_state.current_child_pid.store(0);
 
         if let Err(ref e) = result {
             error!("Batch compress failed for {}: {}", path_for_log, e);
@@ -267,26 +271,16 @@ pub fn cancel_processing(proc_state: State<ProcessingState>) -> Result<(), Strin
 
 #[tauri::command]
 pub fn pause_processing(proc_state: State<ProcessingState>) -> Result<(), String> {
-    let pid = proc_state.current_child_pid.load(Ordering::Acquire);
-    if pid == 0 {
-        warn!("Pause requested but no active FFmpeg process");
-        return Err("No active process to pause".to_string());
-    }
-    crate::process_control::suspend_process(pid)?;
+    let count = proc_state.child_pids.suspend_all()?;
     proc_state.is_paused.store(true, Ordering::Release);
-    info!("Processing paused (PID {})", pid);
+    info!("Processing paused ({} processes)", count);
     Ok(())
 }
 
 #[tauri::command]
 pub fn resume_processing(proc_state: State<ProcessingState>) -> Result<(), String> {
-    let pid = proc_state.current_child_pid.load(Ordering::Acquire);
-    if pid == 0 {
-        warn!("Resume requested but no active FFmpeg process");
-        return Err("No active process to resume".to_string());
-    }
-    crate::process_control::resume_process(pid)?;
+    let count = proc_state.child_pids.resume_all()?;
     proc_state.is_paused.store(false, Ordering::Release);
-    info!("Processing resumed (PID {})", pid);
+    info!("Processing resumed ({} processes)", count);
     Ok(())
 }

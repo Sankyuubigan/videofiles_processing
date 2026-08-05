@@ -43,6 +43,7 @@ pub struct VideoInfo {
     pub height: usize,
     pub fps: f64,
     pub needs_vfr_fix: bool,
+    pub vfr_fix_fps: f64,
     pub is_hevc: bool,
     pub is_10bit: bool,
     pub video_codec: String,
@@ -202,7 +203,7 @@ pub fn get_video_info_raw(input_path: &str) -> Result<VideoInfo, String> {
         .unwrap_or_else(|_| data.format.size.parse::<u64>().unwrap_or(0));
     let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
 
-    let (width, height, video_bitrate, fps, needs_vfr_fix, is_hevc, is_10bit, video_codec, pixel_format) =
+    let (width, height, video_bitrate, fps, needs_vfr_fix, vfr_fix_fps, is_hevc, is_10bit, video_codec, pixel_format) =
         if let Some(vs) = video_stream {
             let w = vs.width;
             let h = vs.height;
@@ -229,13 +230,33 @@ pub fn get_video_info_raw(input_path: &str) -> Result<VideoInfo, String> {
                 0.0
             };
 
-            let needs_fix = vs.r_frame_rate == "1000/1" || vs.r_frame_rate == "0/0" || vs.avg_frame_rate == "0/0";
+            let r_parts: Vec<&str> = vs.r_frame_rate.split('/').collect();
+            let r_val = if r_parts.len() == 2 {
+                let num = r_parts[0].parse::<f64>().unwrap_or(0.0);
+                let den = r_parts[1].parse::<f64>().unwrap_or(1.0);
+                if den != 0.0 { num / den } else { 0.0 }
+            } else {
+                0.0
+            };
+
+            // Реальный VFR-дрейф (r vs avg отличается даже на ~0.5%: 60 vs 60.3) даёт
+            // рассинхрон кадров в чанке и reference-кадре -> крашит SSIMULACRA2 (negative score).
+            let mild_vfr = r_val > 0.0 && fps_val > 0.0 && fps_val < 240.0
+                && (r_val - fps_val).abs() / r_val.max(fps_val) > 0.002;
+
+            let pathological = vs.r_frame_rate == "1000/1" || vs.r_frame_rate == "0/0" || vs.avg_frame_rate == "0/0";
+            let needs_fix = pathological || mild_vfr;
+            let fix_fps = if fps_val > 0.0 && fps_val < 240.0 {
+                (fps_val * 1000.0).round() / 1000.0
+            } else {
+                crate::config::DEFAULT_FPS_FIX
+            };
             let hevc = ["hevc", "h265"].contains(&vs.codec_name.to_lowercase().as_str());
             let tenbit = vs.pix_fmt.ends_with("10le") || vs.pix_fmt.ends_with("10be");
 
-            (w, h, vb, fps_val, needs_fix, hevc, tenbit, vs.codec_name.clone(), vs.pix_fmt.clone())
+            (w, h, vb, fps_val, needs_fix, fix_fps, hevc, tenbit, vs.codec_name.clone(), vs.pix_fmt.clone())
         } else {
-            (0, 0, 0, 0.0, false, false, false, "unknown".to_string(), "unknown".to_string())
+            (0, 0, 0, 0.0, false, crate::config::DEFAULT_FPS_FIX, false, false, "unknown".to_string(), "unknown".to_string())
         };
 
     let audio_bitrate: i64 = audio_streams.iter()
@@ -252,6 +273,7 @@ pub fn get_video_info_raw(input_path: &str) -> Result<VideoInfo, String> {
         height,
         fps,
         needs_vfr_fix,
+        vfr_fix_fps,
         is_hevc,
         is_10bit,
         video_codec,

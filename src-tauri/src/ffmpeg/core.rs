@@ -1,8 +1,9 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::process_control::PidTracker;
 use crate::settings::{get_actual_ffmpeg_path, get_ffprobe_path};
 
 pub fn parse_progress_line(line: &str, duration_seconds: f64) -> i32 {
@@ -54,7 +55,7 @@ pub fn run_command_with_progress(
     stage_name: &str,
     cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> RunResult {
     log::debug!("Executing FFmpeg command: {}", cmd.join(" "));
     let ffmpeg_path = get_actual_ffmpeg_path();
@@ -78,7 +79,7 @@ pub fn run_command_with_progress(
     };
 
     if let Some(ref pid_ref) = child_pid {
-        pid_ref.store(child.id(), Ordering::Release);
+        pid_ref.store(child.id());
     }
 
     let stdout = match child.stdout.take() {
@@ -86,7 +87,7 @@ pub fn run_command_with_progress(
         None => {
             log::error!("Failed to capture FFmpeg stdout in run_command_with_progress");
             if let Some(ref pid_ref) = child_pid {
-                pid_ref.store(0, Ordering::Release);
+                pid_ref.store(0);
             }
             return RunResult { success: false, message: "Failed to capture FFmpeg stdout".to_string() };
         }
@@ -104,7 +105,7 @@ pub fn run_command_with_progress(
             let _ = child.kill();
             log::warn!("FFmpeg operation cancelled");
             if let Some(ref pid_ref) = child_pid {
-                pid_ref.store(0, Ordering::Release);
+                pid_ref.store(0);
             }
             return RunResult { success: false, message: "Operation cancelled".to_string() };
         }
@@ -132,7 +133,7 @@ pub fn run_command_with_progress(
 
     let wait_result = child.wait();
     if let Some(ref pid_ref) = child_pid {
-        pid_ref.store(0, Ordering::Release);
+        pid_ref.store(0);
     }
     match wait_result {
         Ok(return_code) => {
@@ -162,7 +163,7 @@ pub fn run_command_with_progress(
 pub fn run_command_simple(
     cmd: &[String],
     cancel_flag: Arc<AtomicBool>,
-    child_pid: Option<Arc<AtomicU32>>,
+    child_pid: Option<PidTracker>,
 ) -> RunResult {
     log::debug!("Executing FFmpeg command (simple): {}", cmd.join(" "));
     let ffmpeg_path = get_actual_ffmpeg_path();
@@ -186,7 +187,7 @@ pub fn run_command_simple(
     };
 
     if let Some(ref pid_ref) = child_pid {
-        pid_ref.store(child.id(), Ordering::Release);
+        pid_ref.store(child.id());
     }
 
     let stdout_handle = child.stdout.take().map(|stdout| {
@@ -230,7 +231,7 @@ pub fn run_command_simple(
     }
 
     if let Some(ref pid_ref) = child_pid {
-        pid_ref.store(0, Ordering::Release);
+        pid_ref.store(0);
     }
 
     let (output_log, mut error_lines) = stdout_handle

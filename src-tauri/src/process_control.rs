@@ -9,7 +9,6 @@ mod windows_impl {
     };
     use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, SuspendThread};
     use windows_sys::Win32::System::Threading::THREAD_SUSPEND_RESUME;
-
     struct ThreadHandle(HANDLE);
 
     impl ThreadHandle {
@@ -120,3 +119,120 @@ mod windows_impl {
 }
 
 pub use windows_impl::{suspend_process, resume_process};
+
+use log::warn;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Default)]
+pub struct PidRegistry {
+    pids: Arc<Mutex<HashSet<u32>>>,
+}
+
+impl PidRegistry {
+    pub fn register(&self, pid: u32) {
+        if pid == 0 {
+            return;
+        }
+        if let Ok(mut set) = self.pids.lock() {
+            set.insert(pid);
+        }
+    }
+
+    pub fn unregister(&self, pid: u32) {
+        if pid == 0 {
+            return;
+        }
+        if let Ok(mut set) = self.pids.lock() {
+            set.remove(&pid);
+        }
+    }
+
+    pub fn suspend_all(&self) -> Result<usize, String> {
+        let pids: Vec<u32> = match self.pids.lock() {
+            Ok(set) => set.iter().copied().collect(),
+            Err(_) => return Err("Failed to lock PID registry".to_string()),
+        };
+        if pids.is_empty() {
+            return Err("No active process to pause".to_string());
+        }
+        let mut succeeded = 0;
+        for pid in pids {
+            match suspend_process(pid) {
+                Ok(_) => succeeded += 1,
+                Err(e) => warn!("Failed to suspend PID {}: {}", pid, e),
+            }
+        }
+        if succeeded == 0 {
+            return Err("Failed to suspend any process".to_string());
+        }
+        Ok(succeeded)
+    }
+
+    pub fn resume_all(&self) -> Result<usize, String> {
+        let pids: Vec<u32> = match self.pids.lock() {
+            Ok(set) => set.iter().copied().collect(),
+            Err(_) => return Err("Failed to lock PID registry".to_string()),
+        };
+        if pids.is_empty() {
+            return Err("No active process to resume".to_string());
+        }
+        let mut succeeded = 0;
+        for pid in pids {
+            match resume_process(pid) {
+                Ok(_) => succeeded += 1,
+                Err(e) => warn!("Failed to resume PID {}: {}", pid, e),
+            }
+        }
+        if succeeded == 0 {
+            return Err("Failed to resume any process".to_string());
+        }
+        Ok(succeeded)
+    }
+}
+
+#[derive(Clone)]
+pub struct PidTracker {
+    inner: Arc<AtomicU32>,
+    registry: PidRegistry,
+}
+
+impl Default for PidTracker {
+    fn default() -> Self {
+        Self::new(PidRegistry::default())
+    }
+}
+
+impl PidTracker {
+    pub fn new(registry: PidRegistry) -> Self {
+        Self {
+            inner: Arc::new(AtomicU32::new(0)),
+            registry,
+        }
+    }
+
+    pub fn registry(&self) -> &PidRegistry {
+        &self.registry
+    }
+
+    pub fn fork(&self) -> Self {
+        Self::new(self.registry.clone())
+    }
+
+    pub fn load(&self) -> u32 {
+        self.inner.load(Ordering::Acquire)
+    }
+
+    pub fn store(&self, pid: u32) {
+        let prev = self.inner.swap(pid, Ordering::Release);
+        if prev != pid {
+            if prev != 0 {
+                self.registry.unregister(prev);
+            }
+            if pid != 0 {
+                self.registry.register(pid);
+            }
+        }
+    }
+}
