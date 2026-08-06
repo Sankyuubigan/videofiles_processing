@@ -54,6 +54,8 @@ const translations: Record<Locale, Record<string, string>> = {
     'compare.play': 'Play',
     'compare.pause': 'Pause',
     'compare.volume': 'Volume',
+    'compare.preparing': 'Preparing preview...',
+    'compare.converting': 'Converting: {percent}%',
 
     // Settings
     'settings.ffmpeg': 'FFmpeg',
@@ -175,6 +177,8 @@ const translations: Record<Locale, Record<string, string>> = {
     'compare.play': 'Воспроизвести',
     'compare.pause': 'Пауза',
     'compare.volume': 'Громкость',
+    'compare.preparing': 'Подготовка превью...',
+    'compare.converting': 'Конвертируется: {percent}%',
 
     // Settings
     'settings.ffmpeg': 'FFmpeg',

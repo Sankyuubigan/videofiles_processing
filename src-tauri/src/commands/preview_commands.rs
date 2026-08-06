@@ -4,7 +4,31 @@ use tauri::{AppHandle, Emitter, State};
 use log::{error, warn};
 
 use super::compress_commands::ProcessingState;
+use crate::ffmpeg::preview::{PreviewInfo, PreviewJobsState, cancel_job, prepare_preview};
 use crate::video_processor::preview_gif::generate_preview_gif;
+
+#[tauri::command]
+pub async fn prepare_preview_cmd(
+    path: String,
+    force_transcode: bool,
+    app: AppHandle,
+    jobs_state: State<'_, Arc<PreviewJobsState>>,
+) -> Result<PreviewInfo, String> {
+    let jobs = jobs_state.inner().clone();
+    let app_clone = app.clone();
+    tokio::task::spawn_blocking(move || prepare_preview(&path, &app_clone, &jobs, force_transcode))
+        .await
+        .map_err(|e| {
+            let msg = format!("Prepare preview thread panicked: {}", e);
+            error!("{}", msg);
+            msg
+        })?
+}
+
+#[tauri::command]
+pub fn cancel_preview_cmd(job_id: String, jobs_state: State<'_, Arc<PreviewJobsState>>) {
+    cancel_job(jobs_state.inner(), &job_id);
+}
 
 #[tauri::command]
 pub async fn generate_preview_gif_cmd(

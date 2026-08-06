@@ -1,14 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
-import { convertFileSrc } from '@tauri-apps/api/core';
 import { useVideoSync } from '../../hooks/useVideoSync';
 import { useDragDrop } from '../../hooks/useDragDrop';
+import { useCompareSide } from '../../hooks/useCompareSide';
 import { tauriInvoke } from '../../hooks/useTauri';
 import { VideoInfo } from '../../types';
 import { formatFileSize } from '../../constants/codecs';
 import { t } from '../../i18n';
-
-const BROWSER_SUPPORTED_CODECS = ['h264', 'vp8', 'vp9', 'av1'];
 
 interface Props {
   addLog: (msg: string) => void;
@@ -31,6 +29,27 @@ export default function CompareTab({ addLog, isActive }: Props) {
   const followerRef = useRef<HTMLVideoElement>(null);
   const boxARef = useRef<HTMLDivElement>(null);
   const boxBRef = useRef<HTMLDivElement>(null);
+  const forcedARef = useRef(false);
+  const forcedBRef = useRef(false);
+
+  const sideA = useCompareSide({
+    videoRef: leaderRef,
+    addLog,
+    onError: setErrorA,
+    onReady: () => {
+      addLog('Compare: left preview converted, full seeking available');
+      setErrorA(null);
+    },
+  });
+  const sideB = useCompareSide({
+    videoRef: followerRef,
+    addLog,
+    onError: setErrorB,
+    onReady: () => {
+      addLog('Compare: right preview converted, full seeking available');
+      setErrorB(null);
+    },
+  });
 
   useVideoSync(leaderRef, followerRef);
 
@@ -38,11 +57,6 @@ export default function CompareTab({ addLog, isActive }: Props) {
     if (leaderRef.current) leaderRef.current.volume = volume;
     if (followerRef.current) followerRef.current.volume = volume;
   }, [volume]);
-
-  const getVideoSrc = useCallback((path: string): string => {
-    if (!path) return '';
-    return convertFileSrc(path);
-  }, []);
 
   const probeFile = useCallback(async (filePath: string): Promise<VideoInfo | null> => {
     try {
@@ -58,24 +72,28 @@ export default function CompareTab({ addLog, isActive }: Props) {
     const setFile = side === 'a' ? setFileA : setFileB;
     const setInfo = side === 'a' ? setInfoA : setInfoB;
     const setError = side === 'a' ? setErrorA : setErrorB;
+    const loadSide = side === 'a' ? sideA : sideB;
 
     setFile(path);
     setError(null);
+    if (side === 'a') forcedARef.current = false;
+    else forcedBRef.current = false;
 
     const info = await probeFile(path);
-    if (info) {
-      setInfo(info);
-      const codec = info.video_codec.toLowerCase();
-      if (!BROWSER_SUPPORTED_CODECS.includes(codec)) {
-        const msg = `Codec "${info.video_codec}" may not play in the browser. Convert to H.264 (MP4) for best compatibility.`;
-        console.warn('[CompareTab]', msg);
-        addLog(`Compare warning: ${path.split(/[\\/]/).pop()} - ${msg}`);
-        setError(msg);
-      }
+    if (info) setInfo(info);
+    else setInfo(null);
+
+    // Кодек заведомо не поддерживается WebView2 (HEVC и т.п.) — сразу транскодируем,
+    // иначе видео вечно висит чёрным экраном без события ошибки
+    const codec = (info?.video_codec ?? '').toLowerCase();
+    const browserOk = ['h264', 'vp8', 'vp9', 'av1'].includes(codec);
+    if (info && !browserOk) {
+      addLog(`Compare ${side === 'a' ? 'left' : 'right'}: codec "${info.video_codec}" not supported by WebView2, transcoding...`);
+      await loadSide.load(path, true);
     } else {
-      setInfo(null);
+      await loadSide.load(path);
     }
-  }, [probeFile, addLog]);
+  }, [probeFile, sideA, sideB, addLog]);
 
   const handleDrop = useCallback((paths: string[], position: { x: number; y: number }) => {
     if (paths.length === 0) return;
@@ -114,11 +132,13 @@ export default function CompareTab({ addLog, isActive }: Props) {
 
   const handleLoadedMetadata = (side: 'a' | 'b') => {
     const el = side === 'a' ? leaderRef.current : followerRef.current;
-    if (el) {
-      console.log(`[CompareTab] Video ${side} loaded, duration:`, el.duration);
-      if (side === 'a') setDuration(el.duration);
-      else setDuration(prev => (prev > 0 ? prev : el.duration));
-    }
+    if (!el) return;
+    const d = el.duration;
+    console.log(`[CompareTab] Video ${side} loaded, duration:`, d);
+    if (!isFinite(d)) return;
+    addLog(`Compare: ${side === 'a' ? 'left' : 'right'} video loaded (${Math.round(d)}s)`);
+    if (side === 'a') setDuration(d);
+    else setDuration(prev => (prev > 0 ? prev : d));
   };
 
   const handleError = (side: 'a' | 'b', e: React.SyntheticEvent<HTMLVideoElement>) => {
@@ -147,6 +167,24 @@ export default function CompareTab({ addLog, isActive }: Props) {
     const fileName = (side === 'a' ? fileA : fileB)?.split(/[\\/]/).pop() || 'unknown';
     console.error(`[CompareTab] Video ${side} error:`, msg);
     addLog(`Compare ${sideLabel} video error (${fileName}): ${msg}`);
+
+    const sideState = side === 'a' ? sideA : sideB;
+    const forcedRef = side === 'a' ? forcedARef : forcedBRef;
+    const filePath = side === 'a' ? fileA : fileB;
+
+    // Исходник не воспроизводится (нет HEVC-кодека) — автофолбэк на транскод
+    if (
+      sideState.original &&
+      !forcedRef.current &&
+      filePath &&
+      (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || err?.code === MediaError.MEDIA_ERR_DECODE)
+    ) {
+      forcedRef.current = true;
+      addLog(`Compare ${sideLabel}: fallback to transcoding (${fileName})`);
+      sideState.load(filePath, true);
+      return;
+    }
+
     if (side === 'a') setErrorA(msg);
     else setErrorB(msg);
   };
@@ -245,7 +283,7 @@ export default function CompareTab({ addLog, isActive }: Props) {
           {fileA && (
             <video
               ref={leaderRef}
-              src={getVideoSrc(fileA)}
+              src={sideA.mode === 'direct' && sideA.src ? sideA.src : undefined}
               preload="auto"
               onLoadedMetadata={() => handleLoadedMetadata('a')}
               onTimeUpdate={handleTimeUpdate}
@@ -255,6 +293,11 @@ export default function CompareTab({ addLog, isActive }: Props) {
               onError={(e) => handleError('a', e)}
               style={{ objectFit: 'none', background: '#000', width: '100%', height: '100%' }}
             />
+          )}
+          {sideA.converting !== null && (
+            <div className="video-converting">
+              {sideA.converting > 0 ? t('compare.converting', { percent: sideA.converting }) : t('compare.preparing')}
+            </div>
           )}
           {errorA && <div className="video-error">{errorA}</div>}
         </div>
@@ -272,13 +315,18 @@ export default function CompareTab({ addLog, isActive }: Props) {
           {fileB && (
             <video
               ref={followerRef}
-              src={getVideoSrc(fileB)}
+              src={sideB.mode === 'direct' && sideB.src ? sideB.src : undefined}
               preload="auto"
               onLoadedMetadata={() => handleLoadedMetadata('b')}
               onError={(e) => handleError('b', e)}
               muted
               style={{ objectFit: 'none', background: '#000', width: '100%', height: '100%' }}
             />
+          )}
+          {sideB.converting !== null && (
+            <div className="video-converting">
+              {sideB.converting > 0 ? t('compare.converting', { percent: sideB.converting }) : t('compare.preparing')}
+            </div>
           )}
           {errorB && <div className="video-error">{errorB}</div>}
         </div>

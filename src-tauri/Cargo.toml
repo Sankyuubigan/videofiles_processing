@@ -25,6 +25,7 @@ regex = "1"
 dirs = "5"
 futures-util = "0.3"
 axum = "0.7"
+tokio-util = { version = "0.7", features = ["io"] }
 image = "0.25"
 ssimulacra2 = "0.5"
 ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "tls-native"] }
