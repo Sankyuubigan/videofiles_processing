@@ -128,17 +128,6 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
             <label htmlFor="vmafIgnoreNoise">{t('settings.vmaf_ignore_noise')}</label>
           </div>
         </div>
-        <div className="settings-row">
-          <div className="checkbox-row">
-            <input
-              type="checkbox"
-              id="parallelChunks"
-              checked={localSettings.parallel_chunks}
-              onChange={(e) => autoSave({ ...localSettings, parallel_chunks: e.target.checked })}
-            />
-            <label htmlFor="parallelChunks">{t('settings.parallel_chunks')}</label>
-          </div>
-        </div>
       </div>
 
       <div className="settings-group">
@@ -185,7 +174,7 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
                 max={51}
                 step={1}
                 value={localSettings.skip_min_crf_value}
-                onChange={(e) => autoSave({ ...localSettings, skip_min_crf_value: parseFloat(e.target.value) || 18.0 })}
+                onChange={(e) => autoSave({ ...localSettings, skip_min_crf_value: parseFloat(e.target.value) || 24.0 })}
               />
             </div>
           )}

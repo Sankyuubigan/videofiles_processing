@@ -22,8 +22,6 @@ pub struct Settings {
     pub skip_min_crf_value: f64,
     #[serde(default = "default_false")]
     pub vmaf_ignore_noise: bool,
-    #[serde(default = "default_true")]
-    pub parallel_chunks: bool,
     #[serde(default = "default_zero")]
     pub parallel_workers: usize,
 }
@@ -41,7 +39,7 @@ fn default_min_diff() -> f64 {
 }
 
 fn default_min_crf() -> f64 {
-    18.0
+    24.0
 }
 
 fn default_false() -> bool {
@@ -63,9 +61,8 @@ impl Default for Settings {
             skip_min_diff_enabled: true,
             skip_min_diff_percent: 5.0,
             skip_min_crf_enabled: true,
-            skip_min_crf_value: 18.0,
+            skip_min_crf_value: 24.0,
             vmaf_ignore_noise: false,
-            parallel_chunks: true,
             parallel_workers: 0,
         }
     }

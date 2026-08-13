@@ -332,6 +332,17 @@ function App() {
     }
   }, [addLog]);
 
+  const handleFixVfr = useCallback(async (filePath: string) => {
+    setIsProcessing(true);
+    setProgress({ percent: 0, message: 'Starting VFR fix...' });
+    try {
+      await tauriInvoke('fix_vfr_only_cmd', { filePath });
+    } catch (e: any) {
+      addLog(`VFR fix error: ${e}`);
+      setIsProcessing(false);
+    }
+  }, [addLog]);
+
   const handleExtractFrame = useCallback(async (filePath: string, frameNumber: number) => {
     try {
       const result = await tauriInvoke<string>('extract_frame_cmd', { filePath, frameNumber });
@@ -428,6 +439,7 @@ function App() {
             onResume={handleResume}
             onTrim={handleTrim}
             onNormalize={handleNormalize}
+            onFixVfr={handleFixVfr}
             onExtractFrame={handleExtractFrame}
             filesCount={files.length}
             outputDir={outputDir}

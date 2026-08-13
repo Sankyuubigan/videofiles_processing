@@ -94,14 +94,24 @@ fn calculate_ssimulacra2(
     let dist_str = dist_ppm.to_string_lossy().to_string();
 
     let needs_fix = force_vfr_fix || video_info.needs_vfr_fix;
+    // Извлекаем кадр ПО ИНДЕКСУ, а не по времени: тайм-сек на разных time_base
+    // (цепочка fps=24.023 vs чанк mkv 1/1000) попадал на соседние разные кадры
+    // на границе смены сцены -> SSIMULACRA2=-64 (несвязанные кадры).
+    // Обе цепочки дают идентичную последовательность кадров, поэтому один
+    // индекс = один и тот же кадр с обеих сторон.
+    let fps = if needs_fix { video_info.vfr_fix_fps } else { video_info.fps };
+    let frame_idx = if duration > 0.0 && fps > 0.0 {
+        (fps * duration / 2.0).ceil().max(0.0) as usize
+    } else {
+        0
+    };
     extract_source_reference_frame(
         original_path, &orig_str, start_time, duration,
         width, height, needs_fix, video_info.vfr_fix_fps, ignore_noise,
-        cancel_flag.clone(), child_pid.clone(),
+        frame_idx, cancel_flag.clone(), child_pid.clone(),
     )?;
 
-    let encoded_timestamp = if duration > 0.0 { duration / 2.0 } else { 0.0 };
-    extract_frame_for_ssim(encoded_path, &dist_str, encoded_timestamp, width, height, ignore_noise, cancel_flag.clone(), child_pid)?;
+    extract_frame_for_ssim(encoded_path, &dist_str, frame_idx, width, height, ignore_noise, cancel_flag.clone(), child_pid)?;
 
     let orig_img = image::open(&orig_ppm).map_err(|e| {
         let _ = std::fs::remove_file(&orig_ppm);
@@ -179,6 +189,7 @@ fn extract_source_reference_frame(
     needs_fix: bool,
     fix_fps: f64,
     ignore_noise: bool,
+    frame_idx: usize,
     cancel_flag: Arc<AtomicBool>,
     child_pid: Option<PidTracker>,
 ) -> Result<(), String> {
@@ -195,6 +206,8 @@ fn extract_source_reference_frame(
         vf_filters.push(format!("fps={}", fix_fps));
     }
     vf_filters.extend(build_ssim_grade_filters(orig_width, orig_height, ignore_noise));
+    // Выбор кадра по индексу вместо time-seek: детерминированно совпадает с dist-стороной
+    vf_filters.push(format!("select=eq(n\\,{})", frame_idx));
 
     let mut cmd = vec![
         "ffmpeg".to_string(), "-y".to_string(),
@@ -204,7 +217,6 @@ fn extract_source_reference_frame(
     cmd.extend(["-i".to_string(), input_path.to_string()]);
     cmd.extend(["-vf".to_string(), vf_filters.join(",")]);
     cmd.extend([
-        "-ss".to_string(), format!("{:.3}", duration / 2.0),
         "-frames:v".to_string(), "1".to_string(),
         "-pix_fmt".to_string(), "rgb24".to_string(),
         output_path.to_string(),
@@ -222,7 +234,7 @@ fn extract_source_reference_frame(
 fn extract_frame_for_ssim(
     input_path: &str,
     output_path: &str,
-    timestamp: f64,
+    frame_idx: usize,
     orig_width: usize,
     orig_height: usize,
     ignore_noise: bool,
@@ -245,9 +257,13 @@ fn extract_frame_for_ssim(
         vf_filters.push("scale=-1:720:flags=bicubic".to_string());
     }
 
+    // Кадр по ИНДЕКСУ, как на orig-стороне. Time-seek на чанке с B-кадрами (mkv,
+    // time_base 1/1000) попадал на другой соседний кадр, чем на цепочке исходника
+    // (fps, time_base 1000/24023) -> несвязанные кадры в SSIMULACRA2 (score -64).
+    vf_filters.push(format!("select=eq(n\\,{})", frame_idx));
+
     let mut cmd = vec![
         "ffmpeg".to_string(), "-y".to_string(),
-        "-ss".to_string(), format!("{:.3}", timestamp),
     ];
     extend_color_force(&mut cmd);
     cmd.extend(["-i".to_string(), input_path.to_string()]);

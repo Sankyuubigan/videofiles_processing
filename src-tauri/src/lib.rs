@@ -78,6 +78,7 @@ pub fn run() {
             commands::test_commands::run_batch_test,
             commands::edit_commands::trim_video_cmd,
             commands::edit_commands::normalize_audio_cmd,
+            commands::edit_commands::fix_vfr_only_cmd,
             commands::edit_commands::extract_frame_cmd,
             commands::settings_commands::load_settings_cmd,
             commands::settings_commands::save_settings_cmd,

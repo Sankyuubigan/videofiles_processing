@@ -27,6 +27,7 @@ interface Props {
   selectedFile: FileEntry | null;
   onTrim: (path: string, seconds: number, fromStart: boolean) => void;
   onNormalize: (path: string) => void;
+  onFixVfr: (path: string) => void;
   onExtractFrame: (path: string, frame: number) => void;
   onTest: (path: string, forceMetric?: string) => void;
   onPreview: (path: string) => void;
@@ -132,6 +133,15 @@ export default function OperationTabs(props: Props) {
                 VFR: {props.selectedFile.info.needs_vfr_fix ? 'Needs fix' : 'OK'}
               </span>
             )}
+          </div>
+          <div className="op-row">
+            <button
+              className="action-btn"
+              disabled={!props.selectedFile || props.isProcessing}
+              onClick={() => props.selectedFile && props.onFixVfr(props.selectedFile.path)}
+            >
+              {t('op.fix_vfr_only')}
+            </button>
           </div>
           <div className="op-row test-row">
             <label>Test / preview:</label>

@@ -2,6 +2,7 @@ pub mod compress;
 pub mod chunk_test;
 pub mod trim;
 pub mod normalize;
+pub mod vfr;
 pub mod extract_frame;
 pub mod content_type;
 pub mod quality_check;

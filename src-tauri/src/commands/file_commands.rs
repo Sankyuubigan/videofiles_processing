@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::State;
 use log::{info, error, warn};
@@ -46,20 +46,86 @@ impl Default for FileQueueState {
     }
 }
 
+const VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "avi", "mkv", "mov", "webm"];
+
+fn is_video_file(path: &Path) -> bool {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => {
+            let ext_lower = ext.to_ascii_lowercase();
+            VIDEO_EXTENSIONS.contains(&ext_lower.as_str())
+        }
+        None => false,
+    }
+}
+
+fn collect_video_files(path: &Path, out: &mut Vec<String>, depth: usize) {
+    if path.is_file() {
+        if is_video_file(path) {
+            out.push(path.to_string_lossy().to_string());
+        } else {
+            info!("Skipping non-video file: {:?}", path);
+        }
+        return;
+    }
+    if path.is_dir() {
+        if depth >= 20 {
+            warn!("Directory scan depth limit reached, skipping: {:?}", path);
+            return;
+        }
+        match std::fs::read_dir(path) {
+            Ok(entries) => {
+                let mut child_paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+                child_paths.sort();
+                for child in child_paths {
+                    collect_video_files(&child, out, depth + 1);
+                }
+            }
+            Err(e) => warn!("Failed to read directory {:?}: {}", path, e),
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn add_files(paths: Vec<String>, app: tauri::AppHandle, state: State<'_, FileQueueState>, analyzer: State<'_, Analyzer>) -> Result<Vec<FileEntry>, String> {
     info!("add_files called with {} path(s)", paths.len());
-    let mut valid_paths = Vec::new();
+    let mut expanded_paths = Vec::new();
     for path in &paths {
-        if Path::new(path).exists() {
-            valid_paths.push(path.clone());
+        let p = Path::new(path);
+        if !p.exists() {
+            error!("Path does not exist: {}", path);
+            continue;
+        }
+        if p.is_dir() {
+            let before = expanded_paths.len();
+            collect_video_files(p, &mut expanded_paths, 0);
+            info!("Folder {:?} contributed {} video file(s)", path, expanded_paths.len() - before);
+        } else if is_video_file(p) {
+            expanded_paths.push(path.clone());
         } else {
-            error!("File does not exist: {}", path);
+            warn!("Skipping non-video file: {}", path);
         }
     }
 
+    let mut existing_paths: Vec<String> = Vec::new();
+    {
+        let files = state.files.lock().map_err(|e| {
+            let msg = format!("Failed to lock file queue: {}", e);
+            error!("{}", msg);
+            msg
+        })?;
+        existing_paths.extend(files.iter().map(|f| f.path.clone()));
+    }
+    let mut unique_paths = Vec::new();
+    for path in expanded_paths {
+        if existing_paths.contains(&path) {
+            info!("Already in queue, skipping: {}", path);
+            continue;
+        }
+        unique_paths.push(path);
+    }
+
     let mut entries = Vec::new();
-    for path in &valid_paths {
+    for path in &unique_paths {
         entries.push(FileEntry {
             path: path.clone(),
             info: None,
@@ -78,7 +144,7 @@ pub async fn add_files(paths: Vec<String>, app: tauri::AppHandle, state: State<'
         files.extend(entries.clone());
     }
 
-    analyzer.enqueue(app, state.inner().clone(), valid_paths);
+    analyzer.enqueue(app, state.inner().clone(), unique_paths);
     info!("Queued {} file(s) for background analysis", entries.len());
     Ok(entries)
 }

@@ -121,7 +121,7 @@ fn build_gif_command(input_path: &str, output_path: &str, starts: &[f64], seg_du
         concat_in.push_str(&format!("[v{}]", i));
     }
     filters.push(format!(
-        "{}concat=n={}:v=1:a=0,fps={}[cc]",
+        "{}concat=n={}:v=1:a=0,fps={},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709[cc]",
         concat_in, n, PREVIEW_FPS
     ));
     filters.push("[cc]split[x][y];[y]palettegen[pg];[x][pg]paletteuse[out]".to_string());

@@ -11,9 +11,8 @@ const DEFAULT_SETTINGS: Settings = {
   skip_min_diff_enabled: true,
   skip_min_diff_percent: 5.0,
   skip_min_crf_enabled: true,
-  skip_min_crf_value: 18.0,
+  skip_min_crf_value: 24.0,
   vmaf_ignore_noise: false,
-  parallel_chunks: true,
 };
 
 export function useSettings() {

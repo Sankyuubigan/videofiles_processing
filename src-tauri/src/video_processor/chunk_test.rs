@@ -78,7 +78,7 @@ pub fn find_best_crf(
         }
     };
 
-    let parallel = settings.parallel_chunks && timestamps.len() > 1;
+    let parallel = timestamps.len() > 1;
 
     let mut best_crf_closest = codec_info.crf_default;
     let mut best_vmaf_closest = 0.0_f64;
@@ -101,7 +101,6 @@ pub fn find_best_crf(
             cb(10 + step * 10, format!("Auto CRF: testing CRF {}...", mid_crf));
         }
         let mut quality_scores = Vec::new();
-        let mut metric_failed = false;
 
         if parallel {
             let file_stamp = chrono::Utc::now().timestamp_millis();
@@ -122,28 +121,26 @@ pub fn find_best_crf(
                 match outcome {
                     None => {
                         log_worker_panic(i);
+                        warn!("Auto CRF: chunk worker {} panicked, skipping chunk", i + 1);
                         if metric_error.is_none() {
                             metric_error = Some(format!("chunk worker {} panicked", i + 1));
                         }
-                        metric_failed = true;
                     }
                     Some(StepChunkOutcome::Scored { score, metric }) => {
                         info!("Auto CRF: chunk {} at CRF {} -> {}={:.2}", i, mid_crf, metric, score);
                         quality_scores.push(score);
                     }
                     Some(StepChunkOutcome::EncodeFailed { message }) => {
-                        warn!("Auto CRF: encode failed for chunk {} at CRF {}: {}", i, mid_crf, message);
+                        warn!("Auto CRF: encode failed for chunk {} at CRF {}, skipping: {}", i, mid_crf, message);
                         if metric_error.is_none() {
                             metric_error = Some(format!("encode: {}", message));
                         }
-                        metric_failed = true;
                     }
                     Some(StepChunkOutcome::MetricFailed { metric, message }) => {
-                        error!("Auto CRF: {} failed for chunk {} at CRF {}: {}", metric, i, mid_crf, message);
+                        warn!("Auto CRF: {} failed for chunk {} at CRF {}, skipping: {}", metric, i, mid_crf, message);
                         if metric_error.is_none() {
                             metric_error = Some(format!("{}: {}", metric, message));
                         }
-                        metric_failed = true;
                     }
                     Some(StepChunkOutcome::Cancelled) => {
                         info!("Auto CRF: search cancelled during chunk {} at CRF {}", i, mid_crf);
@@ -155,8 +152,8 @@ pub fn find_best_crf(
             if cancelled {
                 break;
             }
-            if metric_failed || quality_scores.is_empty() {
-                warn!("Auto CRF: quality metric failed at step {}, aborting search", step + 1);
+            if quality_scores.is_empty() {
+                warn!("Auto CRF: no chunk scored at step {}, aborting search", step + 1);
                 break;
             }
         } else {
@@ -173,13 +170,12 @@ pub fn find_best_crf(
                         info!("Auto CRF: search cancelled during chunk {} at CRF {}", i, mid_crf);
                         cancelled = true;
                     } else {
-                        warn!("Auto CRF: encode failed for chunk {} at CRF {}: {}", i, mid_crf, result.message);
+                        warn!("Auto CRF: encode failed for chunk {} at CRF {}, skipping: {}", i, mid_crf, result.message);
                         if metric_error.is_none() {
                             metric_error = Some(format!("encode: {}", result.message));
                         }
-                        metric_failed = true;
                     }
-                    break;
+                    continue;
                 }
                 let qr = quality_check::check_quality(
                     input_path, &chunk_str, video_type,
@@ -200,13 +196,12 @@ pub fn find_best_crf(
                                 info!("Auto CRF: search cancelled during {} for chunk {} at CRF {}", r.metric, i, mid_crf);
                                 cancelled = true;
                             } else {
-                                error!("Auto CRF: {} failed for chunk {} at CRF {} (score={})", r.metric, i, mid_crf, r.score);
+                                warn!("Auto CRF: {} failed for chunk {} at CRF {} (score={}), skipping", r.metric, i, mid_crf, r.score);
                                 if metric_error.is_none() {
                                     metric_error = Some(format!("{}: score={}", r.metric, r.score));
                                 }
                             }
-                            metric_failed = true;
-                            break;
+                            continue;
                         }
                         info!("Auto CRF: chunk {} at CRF {} -> {}={:.2}", i, mid_crf, r.metric, r.score);
                         quality_scores.push(r.score);
@@ -216,21 +211,21 @@ pub fn find_best_crf(
                             info!("Auto CRF: search cancelled during quality check for chunk {} at CRF {}", i, mid_crf);
                             cancelled = true;
                         } else {
-                            error!("Auto CRF: quality check error for chunk {} at CRF {}: {}", i, mid_crf, e);
+                            warn!("Auto CRF: quality check error for chunk {} at CRF {}, skipping: {}", i, mid_crf, e);
                             if metric_error.is_none() {
                                 metric_error = Some(format!("quality check: {}", e));
                             }
                         }
-                        metric_failed = true;
-                        break;
+                        continue;
                     }
                 }
             }
 
-            if metric_failed || quality_scores.is_empty() {
-                if !cancelled {
-                    warn!("Auto CRF: quality metric failed at step {}, aborting search", step + 1);
-                }
+            if cancelled {
+                break;
+            }
+            if quality_scores.is_empty() {
+                warn!("Auto CRF: no chunk scored at step {}, aborting search", step + 1);
                 break;
             }
         }
@@ -351,7 +346,7 @@ pub fn run_chunk_test(
         }
     };
 
-    let parallel = settings.parallel_chunks && timestamps.len() > 1;
+    let parallel = timestamps.len() > 1;
 
     let temp_dir = std::env::temp_dir();
     let mut total_size_bytes: u64 = 0;

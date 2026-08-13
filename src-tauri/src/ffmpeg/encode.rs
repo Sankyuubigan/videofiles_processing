@@ -115,6 +115,64 @@ pub fn fix_vfr_target_crf(
     run_command_with_progress(&cmd, Some(duration_seconds), "VFR-fix+compress", cancel_flag, progress_cb, child_pid)
 }
 
+pub fn fix_vfr_only_core(
+    input_path: &str, output_path: &str, duration_seconds: f64, video_info: &super::probe::VideoInfo,
+    cancel_flag: Arc<AtomicBool>, progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
+    child_pid: Option<PidTracker>,
+) -> RunResult {
+    let gpu_info = get_gpu_info();
+    let has_nvenc = gpu_info.contains("NVIDIA NVENC");
+    let mut cmd = vec!["ffmpeg".to_string(), "-y".to_string()];
+    if video_info.is_hevc && has_nvenc {
+        cmd.extend(["-hwaccel".to_string(), "cuda".to_string()]);
+    }
+    cmd.extend(["-i".to_string(), input_path.to_string()]);
+
+    // Пережимаем видео в исходном кодеке с высоким качеством, выравнивая тайм-линию по fps.
+    let encoder = match video_info.video_codec.as_str() {
+        "hevc" => "libx265",
+        "vp9" => "libvpx-vp9",
+        "av1" => "libsvtav1",
+        _ => "libx264",
+    };
+
+    let mut vf_filters = vec![format!("fps={}", video_info.vfr_fix_fps)];
+    // 10-бит сохраняем как есть для libx265, остальным кодеком оставляем глубину yuv420p
+    if video_info.is_10bit && encoder != "libx265" {
+        if encoder == "libx264" {
+            vf_filters.push("format=yuv420p10le".to_string());
+        } else {
+            vf_filters.push("format=yuv420p".to_string());
+        }
+    }
+    cmd.extend(["-vf".to_string(), vf_filters.join(",")]);
+
+    let crf = if video_info.is_10bit { 15 } else { 16 };
+    match encoder {
+        "libx265" => {
+            cmd.extend(["-c:v".to_string(), "libx265".to_string(), "-crf".to_string(), crf.to_string(), "-preset".to_string(), "slow".to_string()]);
+        }
+        "libvpx-vp9" => {
+            cmd.extend(["-c:v".to_string(), "libvpx-vp9".to_string(), "-crf".to_string(), "16".to_string(), "-b:v".to_string(), "0".to_string(), "-deadline".to_string(), "good".to_string(), "-cpu-used".to_string(), "2".to_string()]);
+        }
+        "libsvtav1" => {
+            cmd.extend(["-c:v".to_string(), "libsvtav1".to_string(), "-crf".to_string(), "16".to_string(), "-preset".to_string(), "6".to_string()]);
+        }
+        _ => {
+            cmd.extend(["-c:v".to_string(), "libx264".to_string(), "-crf".to_string(), crf.to_string(), "-preset".to_string(), "slow".to_string()]);
+        }
+    }
+    cmd.extend(["-c:a".to_string(), "copy".to_string()]);
+    if video_info.has_subtitles {
+        cmd.extend(["-c:s".to_string(), "copy".to_string()]);
+        cmd.extend(["-map".to_string(), "0:V".to_string(), "-map".to_string(), "0:a".to_string(), "-map".to_string(), "0:s".to_string()]);
+    } else {
+        cmd.extend(["-map".to_string(), "0:V".to_string(), "-map".to_string(), "0:a".to_string()]);
+    }
+    cmd.extend(["-progress".to_string(), "pipe:1".to_string(), output_path.to_string()]);
+    run_command_with_progress(&cmd, Some(duration_seconds), "VFR-fix", cancel_flag, progress_cb, child_pid)
+}
+
 pub fn compress_video_core(
     input_path: &str, output_path: &str, output_format: &str, codec: &str, crf_value: i32,
     preset_value: &str, duration_seconds: f64, video_info: &super::probe::VideoInfo,

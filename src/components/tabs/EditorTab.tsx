@@ -47,6 +47,7 @@ interface Props {
   onResume: () => void;
   onTrim: (path: string, seconds: number, fromStart: boolean) => void;
   onNormalize: (path: string) => void;
+  onFixVfr: (path: string) => void;
   onExtractFrame: (path: string, frame: number) => void;
   filesCount: number;
   outputDir: string | null;
@@ -117,6 +118,7 @@ export default function EditorTab(props: Props) {
         selectedFile={props.files[props.selectedIndex] || null}
         onTrim={props.onTrim}
         onNormalize={props.onNormalize}
+        onFixVfr={props.onFixVfr}
         onExtractFrame={props.onExtractFrame}
         onTest={props.onTestFile}
         onPreview={props.onPreview}

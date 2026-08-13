@@ -62,7 +62,6 @@ export interface Settings {
   skip_min_crf_enabled: boolean;
   skip_min_crf_value: number;
   vmaf_ignore_noise: boolean;
-  parallel_chunks: boolean;
 }
 
 export type Locale = 'en' | 'ru';
