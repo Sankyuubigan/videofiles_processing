@@ -1,9 +1,11 @@
 import { FileEntry } from '../../types';
 import { formatFileSize, formatDuration } from '../../constants/codecs';
+import { t } from '../../i18n';
 
 interface Props {
   files: FileEntry[];
   selectedIndex: number;
+  grainThreshold: number;
   onSelect: (i: number) => void;
   onRemove: (path: string) => void;
   onVideoTypeChange: (path: string, videoType: string) => void;
@@ -53,6 +55,17 @@ function getEstTimeDisplay(info: FileEntry): string {
   return info.test_result.test_est_time;
 }
 
+const GRAIN_CLEAN_THRESHOLD = 1.5;
+
+function getGrainDisplay(info: FileEntry, grainThreshold: number): { text: string; class: string; title?: string } {
+  const ydif = info.info?.grain_ydif;
+  if (ydif === null || ydif === undefined) return { text: '--', class: '' };
+  const title = `YDIF ${ydif.toFixed(2)}`;
+  if (ydif < GRAIN_CLEAN_THRESHOLD) return { text: t('table.grain_clean'), class: 'cell-green', title };
+  if (ydif < grainThreshold) return { text: t('table.grain_medium'), class: 'cell-orange', title };
+  return { text: t('table.grain_heavy'), class: 'cell-red', title };
+}
+
 function getVideoTypeDisplay(info: FileEntry): { text: string; class: string } {
   if (info.analysis_state === 'failed') return { text: 'Error', class: 'cell-red' };
   const vt = info.info?.video_type;
@@ -69,7 +82,7 @@ function isAnalyzing(info: FileEntry): boolean {
   return info.analysis_state === 'pending' || info.analysis_state === 'probing' || info.analysis_state === 'detecting';
 }
 
-export default function FileTable({ files, selectedIndex, onSelect, onRemove, onVideoTypeChange }: Props) {
+export default function FileTable({ files, selectedIndex, grainThreshold, onSelect, onRemove, onVideoTypeChange }: Props) {
   if (files.length === 0) {
     return (
       <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>
@@ -87,6 +100,7 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
           <th>Duration</th>
           <th>Type</th>
           <th>CRF</th>
+          <th>{t('table.grain')}</th>
           <th>VFR Status</th>
           <th>Est. Size (Diff)</th>
           <th>CRF / Metric</th>
@@ -97,6 +111,7 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
       <tbody>
         {files.map((file, i) => {
           const crfDisp = getCrfDisplay(file);
+          const grainDisp = getGrainDisplay(file, grainThreshold);
           const vfrDisp = getVfrDisplay(file);
           const estSizeDisp = getEstSizeDisplay(file);
           const vmafDisp = getVmafDisplay(file);
@@ -132,6 +147,7 @@ export default function FileTable({ files, selectedIndex, onSelect, onRemove, on
                 )}
               </td>
               <td className={crfDisp.class}>{crfDisp.text}</td>
+              <td className={grainDisp.class} title={grainDisp.title}>{grainDisp.text}</td>
               <td className={vfrDisp.class}>{vfrDisp.text}</td>
               <td className={estSizeDisp.class}>{estSizeDisp.text}</td>
               <td className={vmafDisp.class} title={vmafDisp.title}>{vmafDisp.text}</td>

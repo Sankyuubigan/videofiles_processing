@@ -12,7 +12,12 @@ const DEFAULT_SETTINGS: Settings = {
   skip_min_diff_percent: 5.0,
   skip_min_crf_enabled: true,
   skip_min_crf_value: 24.0,
-  vmaf_ignore_noise: false,
+  ignore_noise_for_tests: false,
+  parallel_denoise: true,
+  denoise_enabled: true,
+  denoise_grain_threshold: 4.0,
+  denoise_max_threads: 0,
+  denoise_max_segments: 0,
 };
 
 export function useSettings() {

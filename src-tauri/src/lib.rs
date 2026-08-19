@@ -8,6 +8,7 @@ mod commands;
 mod tauri_logger;
 mod process_control;
 mod nn_quality;
+mod vapoursynth;
 
 use log::{info, warn};
 use std::sync::Arc;
@@ -91,6 +92,7 @@ pub fn run() {
             commands::preview_commands::generate_preview_gif_cmd,
             commands::preview_commands::prepare_preview_cmd,
             commands::preview_commands::cancel_preview_cmd,
+            commands::quality_commands::assess_quality_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -378,9 +378,16 @@ pub fn calculate_vmaf(
         ref_filters, dist_filters, json_path_ff, n_subsample
     );
 
+    // `-t` on the input limits the decode window to the chunk (trim_start +
+    // duration) instead of decoding the whole tail of the file from the seek
+    // point — without it a 4K file decodes from `-ss` all the way to the end,
+    // which took ~6 minutes per VMAF check. `-threads 4` keeps the ~5 parallel
+    // VMAF processes from oversubscribing the CPU.
     let cmd = vec![
         "ffmpeg".to_string(), "-y".to_string(),
+        "-threads".to_string(), "4".to_string(),
         "-ss".to_string(), format!("{:.3}", fast_seek),
+        "-t".to_string(), format!("{:.3}", trim_start + duration),
         "-i".to_string(), original_path.to_string(),
         "-i".to_string(), chunk_path.to_string(),
         "-filter_complex".to_string(), filter_complex,

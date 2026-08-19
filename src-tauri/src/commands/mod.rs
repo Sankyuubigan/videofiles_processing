@@ -6,3 +6,4 @@ pub mod settings_commands;
 pub mod info_commands;
 pub mod compare_commands;
 pub mod preview_commands;
+pub mod quality_commands;

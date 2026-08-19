@@ -5,6 +5,8 @@ use log::{info, error, warn};
 use crate::commands::file_commands::FileQueueState;
 use crate::process_control::{PidRegistry, PidTracker};
 use crate::video_processor::compress::compress_video;
+use crate::vapoursynth::denoise::sigma_from_ydif;
+use crate::vapoursynth::setup::ensure_installed;
 
 pub struct ProcessingState {
     pub cancel_flag: Arc<AtomicBool>,
@@ -39,6 +41,7 @@ pub async fn start_compress(
     auto_crf: bool,
     target_vmaf: f64,
     target_ssimulacra2: f64,
+    parallel_denoise: bool,
     app: AppHandle,
     queue_state: State<'_, FileQueueState>,
     proc_state: State<'_, ProcessingState>,
@@ -59,7 +62,7 @@ pub async fn start_compress(
     proc_state.is_paused.store(false, Ordering::Relaxed);
     proc_state.current_child_pid.store(0);
 
-    let (path, output_dir, test_result) = {
+    let (path, output_dir, test_result, denoise_sigma) = {
         let files = queue_state.files.lock().map_err(|e| {
             let msg = format!("Failed to lock file queue: {}", e);
             error!("{}", msg);
@@ -72,12 +75,18 @@ pub async fn start_compress(
         })?;
         let path = file.path.clone();
         let test_result = file.test_result.clone();
+        let settings = crate::settings::load_settings();
+        let denoise_sigma = if settings.denoise_enabled {
+            sigma_from_ydif(file.info.as_ref().and_then(|i| i.grain_ydif), settings.denoise_grain_threshold)
+        } else {
+            None
+        };
         let output_dir = queue_state.output_dir.lock().map_err(|e| {
             let msg = format!("Failed to lock output dir: {}", e);
             error!("{}", msg);
             msg
         })?.clone();
-        (path, output_dir, test_result)
+        (path, output_dir, test_result, denoise_sigma)
     };
 
     info!("Starting compress: {} -> {} ({}, crf={}, preset={})", path, output_format, codec, crf_value, preset_value);
@@ -88,6 +97,11 @@ pub async fn start_compress(
     let app_clone = app.clone();
     let child_pid = proc_state.current_child_pid.clone();
     let result = tokio::task::spawn_blocking(move || {
+        if denoise_sigma.is_some() {
+            if let Err(e) = tauri::async_runtime::block_on(ensure_installed(|_s: String| {})) {
+                return Err(format!("Failed to install VapourSynth denoise plugins: {}", e));
+            }
+        }
         let progress_cb = {
             let app = app_clone.clone();
             Arc::new(move |percent: i32, msg: String| {
@@ -99,6 +113,7 @@ pub async fn start_compress(
             force_vfr_fix, use_hardware, cancel, Some(progress_cb),
             output_dir.as_deref(), auto_crf, target_vmaf, target_ssimulacra2,
             test_result.as_ref(), Some(child_pid),
+            denoise_sigma, parallel_denoise,
         )
     }).await.map_err(|e| {
         let msg = format!("Compress thread panicked: {}", e);
@@ -146,6 +161,7 @@ pub async fn start_batch_compress(
     auto_crf: bool,
     target_vmaf: f64,
     target_ssimulacra2: f64,
+    parallel_denoise: bool,
     app: AppHandle,
     queue_state: State<'_, FileQueueState>,
     proc_state: State<'_, ProcessingState>,
@@ -208,7 +224,18 @@ pub async fn start_batch_compress(
 
         let path_for_log = path.clone();
         let file_test_result = file.test_result.clone();
+        let settings = crate::settings::load_settings();
+        let denoise_sigma = if settings.denoise_enabled {
+            sigma_from_ydif(file.info.as_ref().and_then(|i| i.grain_ydif), settings.denoise_grain_threshold)
+        } else {
+            None
+        };
         let result = tokio::task::spawn_blocking(move || {
+            if denoise_sigma.is_some() {
+                if let Err(e) = tauri::async_runtime::block_on(ensure_installed(|_s: String| {})) {
+                    return Err(format!("Failed to install VapourSynth denoise plugins: {}", e));
+                }
+            }
             let progress_cb = {
                 let app = app_clone.clone();
                 Arc::new(move |percent: i32, msg: String| {
@@ -221,6 +248,7 @@ pub async fn start_batch_compress(
                 force_vfr_fix, use_hardware, cancel, Some(progress_cb),
                 out_dir.as_deref(), auto_crf, target_vmaf, target_ssimulacra2,
                 file_test_result.as_ref(), Some(child_pid),
+                denoise_sigma, parallel_denoise,
             )
         }).await.map_err(|e| {
             let msg = format!("Batch compress thread panicked: {}", e);

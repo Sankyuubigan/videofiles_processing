@@ -30,6 +30,7 @@ export interface VideoInfo {
   complexity_desc: string;
   crf_value: number | null;
   video_type: 'Animation' | 'LiveAction' | 'Rendered';
+  grain_ydif: number | null;
 }
 
 export interface FileEntry {
@@ -61,7 +62,12 @@ export interface Settings {
   skip_min_diff_percent: number;
   skip_min_crf_enabled: boolean;
   skip_min_crf_value: number;
-  vmaf_ignore_noise: boolean;
+  ignore_noise_for_tests: boolean;
+  parallel_denoise: boolean;
+  denoise_enabled: boolean;
+  denoise_grain_threshold: number;
+  denoise_max_threads: number;
+  denoise_max_segments: number;
 }
 
 export type Locale = 'en' | 'ru';

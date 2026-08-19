@@ -122,6 +122,24 @@ fn analyze_file(app: AppHandle, queue: FileQueueState, path: String) {
     info!("Content type for {}: {:?}", path, final_type);
     info.video_type = final_type;
 
+    let grain = crate::video_processor::grain::estimate_grain(
+        &path,
+        duration,
+        crate::video_processor::grain::GRAIN_WINDOWS,
+        crate::video_processor::grain::GRAIN_WINDOW_SEC,
+        Arc::new(AtomicBool::new(false)),
+    );
+    match grain {
+        Ok(g) => {
+            info!(
+                "Grain for {}: YDIF median {:.2} (min {:.2}, max {:.2}, {} windows)",
+                path, g.ydif_median, g.ydif_min, g.ydif_max, g.windows_used
+            );
+            info.grain_ydif = Some(g.ydif_median);
+        }
+        Err(e) => warn!("Grain analysis failed for {}: {}", path, e),
+    }
+
     emit_and_update(&app, &queue, &path, |entry| {
         entry.info = Some(info.clone());
         entry.error = None;

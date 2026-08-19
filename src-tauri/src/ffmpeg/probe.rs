@@ -56,6 +56,7 @@ pub struct VideoInfo {
     pub complexity_desc: String,
     pub crf_value: Option<f64>,
     pub video_type: VideoType,
+    pub grain_ydif: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -286,5 +287,6 @@ pub fn get_video_info_raw(input_path: &str) -> Result<VideoInfo, String> {
         complexity_desc: String::new(),
         crf_value: None,
         video_type: VideoType::LiveAction,
+        grain_ydif: None,
     })
 }

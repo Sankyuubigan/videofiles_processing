@@ -9,12 +9,14 @@ interface Props {
   files: FileEntry[];
   selectedIndex: number;
   setSelectedIndex: (i: number) => void;
+  grainThreshold: number;
   isDragOver: boolean;
   onSelectFiles: () => void;
   onSelectOutputDir: () => void;
   onResetOutputDir: () => void;
   onRemoveFile: (path: string) => void;
   onTestFile: (path: string, forceMetric?: string) => void;
+  onQualityCheck: (path: string) => void;
   onVideoTypeChange: (path: string, videoType: string) => void;
   operationTab: OperationTab;
   setOperationTab: (t: OperationTab) => void;
@@ -88,6 +90,7 @@ export default function EditorTab(props: Props) {
           <FileTable
             files={props.files}
             selectedIndex={props.selectedIndex}
+            grainThreshold={props.grainThreshold}
             onSelect={props.setSelectedIndex}
             onRemove={props.onRemoveFile}
             onVideoTypeChange={props.onVideoTypeChange}
@@ -121,6 +124,7 @@ export default function EditorTab(props: Props) {
         onFixVfr={props.onFixVfr}
         onExtractFrame={props.onExtractFrame}
         onTest={props.onTestFile}
+        onQuality={props.onQualityCheck}
         onPreview={props.onPreview}
         isProcessing={props.isProcessing}
       />

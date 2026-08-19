@@ -105,6 +105,27 @@ mod windows_impl {
         }
         Ok(count)
     }
+
+    /// Lowers a child process to BELOW_NORMAL priority so heavy encode/denoise
+    /// work does not starve the UI and the rest of the system stays responsive.
+    pub fn set_process_below_normal(pid: u32) -> Result<(), String> {
+        if pid == 0 {
+            return Ok(());
+        }
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, SetPriorityClass, BELOW_NORMAL_PRIORITY_CLASS, PROCESS_SET_INFORMATION,
+        };
+        let h = unsafe { OpenProcess(PROCESS_SET_INFORMATION, 0, pid) };
+        if h.is_null() {
+            return Err(format!("OpenProcess failed for PID {}", pid));
+        }
+        let ok = unsafe { SetPriorityClass(h, BELOW_NORMAL_PRIORITY_CLASS) };
+        unsafe { CloseHandle(h) };
+        if ok == 0 {
+            return Err(format!("SetPriorityClass failed for PID {}", pid));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -116,9 +137,13 @@ mod windows_impl {
     pub fn resume_process(_pid: u32) -> Result<usize, String> {
         Err("Resume is only supported on Windows".to_string())
     }
+
+    pub fn set_process_below_normal(_pid: u32) -> Result<(), String> {
+        Ok(())
+    }
 }
 
-pub use windows_impl::{suspend_process, resume_process};
+pub use windows_impl::{suspend_process, resume_process, set_process_below_normal};
 
 use log::warn;
 use std::collections::HashSet;

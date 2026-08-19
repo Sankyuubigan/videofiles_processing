@@ -1,3 +1,4 @@
+use std::env;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -13,6 +14,8 @@ use crate::video_processor::chunk_test::find_best_crf;
 use crate::video_processor::content_type::detect_content_type;
 use crate::commands::file_commands::TestResult;
 use crate::process_control::PidTracker;
+use crate::vapoursynth::script::{generate_denoise_vpy, DenoiseSource};
+use crate::vapoursynth::denoise::DenoiseSpec;
 
 pub fn get_full_video_info(input_path: &str) -> Result<VideoInfo, String> {
     let mut info = get_video_info_basic(input_path)?;
@@ -97,6 +100,8 @@ pub fn compress_video(
     auto_crf: bool, target_vmaf: f64, target_ssimulacra2: f64,
     test_result: Option<&TestResult>,
     child_pid: Option<PidTracker>,
+    denoise_sigma: Option<f64>,
+    parallel_denoise: bool,
 ) -> Result<String, String> {
     let input_p = Path::new(input_path);
     let mut actual_crf = crf_value;
@@ -120,7 +125,12 @@ pub fn compress_video(
             }
             return Err(reason);
         }
-        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix, child_pid.clone());
+        let denoise_arg = denoise_sigma.map(|s| DenoiseSpec {
+            input: input_path.to_string(),
+            sigma: s,
+            fps: video_info.fps,
+        });
+        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix, child_pid.clone(), denoise_arg);
         if acrf.cancelled {
             warn!("Auto CRF cancelled for {}", input_path);
             return Err("Operation cancelled".to_string());
@@ -163,7 +173,40 @@ pub fn compress_video(
         }
     }
 
-    if needs_fix {
+    if let Some(sigma) = denoise_sigma {
+        info!("Denoise (sigma {:.2}) applied before compression for {}", sigma, input_path);
+        let denoise_vs_threads = crate::vapoursynth::runner::denoise_vs_threads_for_workers(1);
+        let denoise_result = if parallel_denoise {
+            crate::vapoursynth::runner::run_denoise_encode_segmented(
+                input_path, &output_str, output_format, codec, actual_crf,
+                preset_value, use_hardware, &video_info, video_type, sigma,
+                cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+            )
+        } else {
+            let vpy = generate_denoise_vpy(
+                input_path, video_info.fps, sigma, DenoiseSource::Ffms2, None, true,
+                denoise_vs_threads,
+            );
+            let vpy_path = env::temp_dir().join("denoise_run.vpy");
+            if let Err(e) = std::fs::write(&vpy_path, vpy) {
+                error!("Failed to write denoise script {:?}: {}", vpy_path, e);
+                return Err(format!("Failed to write denoise script: {}", e));
+            }
+            let res = crate::vapoursynth::runner::run_denoise_encode_single(
+                &vpy_path.to_string_lossy(),
+                input_path, &output_str, output_format, codec, actual_crf,
+                preset_value, use_hardware, &video_info, video_type,
+                cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+                denoise_vs_threads,
+            );
+            let _ = std::fs::remove_file(&vpy_path);
+            res
+        };
+        if !denoise_result.success {
+            error!("Denoise+compress failed for {}: {}", input_path, denoise_result.message);
+            return Err(denoise_result.message);
+        }
+    } else if needs_fix {
         let result = fix_vfr_target_crf(
             input_path, &output_str, output_format, codec, actual_crf,
             preset_value, duration, use_hardware, &video_info, video_type, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),

@@ -7,5 +7,6 @@ pub mod extract_frame;
 pub mod content_type;
 pub mod quality_check;
 pub mod analyzer;
+pub mod grain;
 pub mod preview_gif;
 pub mod parallel_chunks;

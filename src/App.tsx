@@ -31,7 +31,7 @@ function App() {
   const [crfValue, setCrfValue] = useState(22);
   const [autoCrf, setAutoCrf] = useState(true);
   const [targetVmaf, setTargetVmaf] = useState(90.0);
-  const [targetSsimulacra2, setTargetSsimulacra2] = useState(77.0);
+  const [targetSsimulacra2, setTargetSsimulacra2] = useState(68.0);
   const [forceVfrFix, setForceVfrFix] = useState(false);
   const [operationTab, setOperationTab] = useState<OperationTab>('compress');
 
@@ -53,6 +53,11 @@ function App() {
       setOutputDir(dir || null);
     }).catch(() => {});
   }, []);
+
+  // Sync queue from backend on mount
+  useEffect(() => {
+    refreshFiles();
+  }, [refreshFiles]);
 
   const addLog = useCallback((msg: string) => {
     const now = new Date();
@@ -189,12 +194,13 @@ function App() {
         autoCrf,
         targetVmaf,
         targetSsimulacra2,
+        parallelDenoise: settings.parallel_denoise ?? true,
       });
     } catch (e: any) {
       addLog(`Error: ${e}`);
       setIsProcessing(false);
     }
-  }, [selectedIndex, files, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, targetSsimulacra2, addLog]);
+  }, [selectedIndex, files, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, targetSsimulacra2, settings.parallel_denoise, addLog]);
 
   const handleBatchCompress = useCallback(async () => {
     if (files.length === 0) return;
@@ -211,12 +217,13 @@ function App() {
         autoCrf,
         targetVmaf,
         targetSsimulacra2,
+        parallelDenoise: settings.parallel_denoise ?? true,
       });
     } catch (e: any) {
       addLog(`Batch error: ${e}`);
       setIsProcessing(false);
     }
-  }, [files.length, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, targetSsimulacra2, addLog]);
+  }, [files.length, selectedFormat, selectedCodec, crfValue, selectedPreset, forceVfrFix, useHardware, autoCrf, targetVmaf, targetSsimulacra2, settings.parallel_denoise, addLog]);
 
   const handleCancel = useCallback(async () => {
     try {
@@ -297,6 +304,26 @@ function App() {
     }
     setIsProcessing(false);
   }, [files.length, selectedCodec, crfValue, selectedPreset, useHardware, autoCrf, targetVmaf, targetSsimulacra2, forceVfrFix, addLog]);
+
+  const handleQualityCheck = useCallback(async (path: string) => {
+    if (!path) return;
+    if (!files.some(f => f.path === path)) return;
+    setIsProcessing(true);
+    try {
+      const result = await tauriInvoke<any>('assess_quality_cmd', { path });
+      setProgress({ percent: 100, message: 'Quality done!' });
+      if (result?.verdict) {
+        addLog(`Quality verdict: ${result.verdict}`);
+        (result.metrics || []).forEach((m: any) => {
+          addLog(`  ${m.name}: ${m.avg_pct.toFixed(0)}% [${m.min_pct.toFixed(0)}..${m.max_pct.toFixed(0)}%] (${m.note})`);
+        });
+      }
+    } catch (e: any) {
+      addLog(`Quality error: ${e}`);
+      setProgress({ percent: 0, message: 'Error' });
+    }
+    setIsProcessing(false);
+  }, [files, addLog]);
 
   const handleVideoTypeChange = useCallback(async (path: string, videoType: string) => {
     const file = files.find(f => f.path === path);
@@ -407,7 +434,9 @@ function App() {
             onSelectOutputDir={handleSelectOutputDir}
             onRemoveFile={removeFile}
             onTestFile={handleTestFile}
+            onQualityCheck={handleQualityCheck}
             onVideoTypeChange={handleVideoTypeChange}
+            grainThreshold={settings.denoise_grain_threshold}
             operationTab={operationTab}
             setOperationTab={setOperationTab}
             selectedFormat={selectedFormat}

@@ -77,6 +77,9 @@ pub fn run_command_with_progress(
             return RunResult { success: false, message: format!("Failed to start FFmpeg: {}", e) };
         }
     };
+    if let Err(e) = crate::process_control::set_process_below_normal(child.id()) {
+        log::debug!("Failed to lower ffmpeg priority: {}", e);
+    }
 
     if let Some(ref pid_ref) = child_pid {
         pid_ref.store(child.id());
@@ -185,6 +188,9 @@ pub fn run_command_simple(
             return RunResult { success: false, message: format!("Failed to start FFmpeg (simple): {}", e) };
         }
     };
+    if let Err(e) = crate::process_control::set_process_below_normal(child.id()) {
+        log::debug!("Failed to lower ffmpeg priority: {}", e);
+    }
 
     if let Some(ref pid_ref) = child_pid {
         pid_ref.store(child.id());
@@ -272,6 +278,130 @@ pub fn run_command_simple(
         Err(e) => {
             log::error!("Failed to wait for FFmpeg: {}", e);
             RunResult { success: false, message: format!("Failed to wait for FFmpeg: {}", e) }
+        }
+    }
+}
+
+pub struct RunOutputResult {
+    pub success: bool,
+    pub message: String,
+    pub lines: Vec<String>,
+}
+
+/// Like `run_command_simple`, but also returns the captured stdout lines
+/// (e.g. for parsing ffmpeg filter metadata printed to stdout with `file=-`).
+pub fn run_command_simple_output(
+    cmd: &[String],
+    cancel_flag: Arc<AtomicBool>,
+    child_pid: Option<PidTracker>,
+) -> RunOutputResult {
+    log::debug!("Executing FFmpeg command (output): {}", cmd.join(" "));
+    let ffmpeg_path = get_actual_ffmpeg_path();
+
+    let mut command = Command::new(&ffmpeg_path);
+    command.args(cmd.iter().skip(1));
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to start FFmpeg (output): {}", e);
+            return RunOutputResult {
+                success: false,
+                message: format!("Failed to start FFmpeg (output): {}", e),
+                lines: Vec::new(),
+            };
+        }
+    };
+    if let Err(e) = crate::process_control::set_process_below_normal(child.id()) {
+        log::debug!("Failed to lower ffmpeg priority: {}", e);
+    }
+
+    if let Some(ref pid_ref) = child_pid {
+        pid_ref.store(child.id());
+    }
+
+    let stdout_handle = child.stdout.take().map(|stdout| {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            let mut lines = Vec::new();
+            for line_result in reader.lines() {
+                if let Ok(line) = line_result {
+                    lines.push(line);
+                }
+            }
+            lines
+        })
+    });
+
+    let stderr_handle = child.stderr.take().map(spawn_stderr_drainer);
+
+    let mut cancelled = false;
+    let mut wait_error: Option<String> = None;
+    loop {
+        if cancel_flag.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            log::warn!("FFmpeg operation cancelled (output)");
+            cancelled = true;
+            break;
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(200)),
+            Err(e) => {
+                log::error!("Failed to wait for FFmpeg (output): {}", e);
+                wait_error = Some(format!("Failed to wait for FFmpeg: {}", e));
+                break;
+            }
+        }
+    }
+
+    if let Some(ref pid_ref) = child_pid {
+        pid_ref.store(0);
+    }
+
+    let lines = stdout_handle
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+
+    if let Some(handle) = stderr_handle {
+        let _ = handle.join();
+    }
+
+    if cancelled {
+        return RunOutputResult { success: false, message: "Operation cancelled".to_string(), lines };
+    }
+    if let Some(msg) = wait_error {
+        return RunOutputResult { success: false, message: msg, lines };
+    }
+
+    match child.wait() {
+        Ok(return_code) => {
+            if return_code.success() {
+                RunOutputResult {
+                    success: true,
+                    message: "FFmpeg command completed successfully".to_string(),
+                    lines,
+                }
+            } else {
+                let msg = format!(
+                    "FFmpeg error (code {:?}).\nLog:\n{}",
+                    return_code.code().unwrap_or(-1),
+                    lines.iter().rev().take(15).cloned().collect::<Vec<_>>().join("\n")
+                );
+                log::error!("FFmpeg output command: {}", msg);
+                RunOutputResult { success: false, message: msg, lines }
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to wait for FFmpeg: {}", e);
+            RunOutputResult { success: false, message: format!("Failed to wait for FFmpeg: {}", e), lines }
         }
     }
 }

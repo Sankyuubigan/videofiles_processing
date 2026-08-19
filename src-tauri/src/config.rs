@@ -30,6 +30,7 @@ pub const DEFAULT_VP9_PRESET: &str = "slow";
 pub const COMPRESSED_VIDEO_SUFFIX: &str = "_compressed";
 pub const TRIMMED_VIDEO_SUFFIX: &str = "_trimmed";
 pub const EXTRACTED_FRAME_SUFFIX: &str = "_frame";
+pub const DENOISED_VIDEO_SUFFIX: &str = "_denoised";
 
 pub const _DEFAULT_CODEC_KEY: &str = "libx264";
 pub const _DEFAULT_OUTPUT_FORMAT_KEY: &str = "mp4";

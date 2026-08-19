@@ -5,6 +5,7 @@ use log::{error, warn};
 
 use crate::commands::file_commands::{FileQueueState, TestResult};
 use crate::video_processor::chunk_test::{run_chunk_test, ChunkTestResult};
+use crate::vapoursynth::denoise::{sigma_from_ydif, DenoiseSpec};
 
 use super::compress_commands::ProcessingState;
 
@@ -84,17 +85,29 @@ pub async fn run_chunk_test_cmd(
     }
     proc_state.cancel_flag.store(false, Ordering::Relaxed);
 
-    let path = {
+    let (path, denoise) = {
         let files = queue_state.files.lock().map_err(|e| {
-            let msg = format!("Failed to lock file queue: {}", e);
+            let msg = format!("Failed to lock file queue: {}", path);
             error!("{}", msg);
             msg
         })?;
-        files.iter().find(|e| e.path == path).ok_or_else(|| {
+        let file = files.iter().find(|e| e.path == path).ok_or_else(|| {
             let msg = format!("File not found in queue: {}", path);
             error!("{}", msg);
             msg
-        })?.path.clone()
+        })?.clone();
+        let settings = crate::settings::load_settings();
+        let sigma = sigma_from_ydif(file.info.as_ref().and_then(|i| i.grain_ydif), settings.denoise_grain_threshold);
+        let denoise = if settings.denoise_enabled {
+            sigma.map(|s| DenoiseSpec {
+                input: file.path.clone(),
+                sigma: s,
+                fps: file.info.as_ref().map(|i| i.fps).unwrap_or(0.0),
+            })
+        } else {
+            None
+        };
+        (file.path.clone(), denoise)
     };
 
     let path_for_log = path.clone();
@@ -108,7 +121,7 @@ pub async fn run_chunk_test_cmd(
         }))
     };
     let result = tokio::task::spawn_blocking(move || {
-        run_chunk_test(&path, &codec, crf_value, &preset_value, use_hardware, cancel, auto_crf, target_vmaf, target_ssimulacra2, force_vfr_fix, force_metric, progress_cb, Some(child_pid))
+        run_chunk_test(&path, &codec, crf_value, &preset_value, use_hardware, cancel, auto_crf, target_vmaf, target_ssimulacra2, force_vfr_fix, force_metric, progress_cb, Some(child_pid), denoise)
     }).await.map_err(|e| {
         let msg = format!("Chunk test thread panicked: {}", e);
         error!("{}", msg);
@@ -185,6 +198,17 @@ pub async fn run_batch_test(
         let path = file.path.clone();
         let codec = codec.clone();
         let preset = preset_value.clone();
+        let settings = crate::settings::load_settings();
+        let sigma = sigma_from_ydif(file.info.as_ref().and_then(|i| i.grain_ydif), settings.denoise_grain_threshold);
+        let denoise = if settings.denoise_enabled {
+            sigma.map(|s| DenoiseSpec {
+                input: file.path.clone(),
+                sigma: s,
+                fps: file.info.as_ref().map(|i| i.fps).unwrap_or(0.0),
+            })
+        } else {
+            None
+        };
         let progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>> = {
             let app = app.clone();
             Some(Arc::new(move |percent: i32, message: String| {
@@ -193,7 +217,7 @@ pub async fn run_batch_test(
         };
 
         let result = tokio::task::spawn_blocking(move || {
-            run_chunk_test(&path, &codec, crf_value, &preset, use_hardware, cancel, auto_crf, target_vmaf, target_ssimulacra2, force_vfr_fix, None, progress_cb, Some(child_pid))
+            run_chunk_test(&path, &codec, crf_value, &preset, use_hardware, cancel, auto_crf, target_vmaf, target_ssimulacra2, force_vfr_fix, None, progress_cb, Some(child_pid), denoise)
         }).await.map_err(|e| {
             let msg = format!("Batch test thread panicked for {}: {}", file.path, e);
             error!("{}", msg);

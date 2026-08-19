@@ -43,6 +43,7 @@ pub fn check_quality(
         let score = calculate_ssimulacra2(
             original_path, encoded_path, start_time, duration,
             width, height, force_vfr_fix, ignore_noise, video_info,
+            (start_time * 1000.0) as u64,
             cancel_flag, child_pid,
         )?;
         let passed = score >= target_ssimulacra2;
@@ -72,7 +73,68 @@ pub fn check_quality(
     }
 }
 
-fn calculate_ssimulacra2(
+/// Like `check_quality`, but both the reference and the encoded clip are
+/// denoised and already aligned to start at PTS 0 (no re-seek), so VMAF/SSIM is
+/// measured against the denoised source rather than the original grainy one.
+pub fn check_quality_denoised(
+    reference_path: &str,
+    encoded_path: &str,
+    video_type: &VideoType,
+    duration: f64,
+    n_subsample: usize,
+    width: usize,
+    height: usize,
+    video_info: &crate::ffmpeg::probe::VideoInfo,
+    force_vfr_fix: bool,
+    ignore_noise: bool,
+    target_vmaf: f64,
+    target_ssimulacra2: f64,
+    cancel_flag: Arc<AtomicBool>,
+    child_pid: Option<PidTracker>,
+    salt: u64,
+    metric_override: Option<String>,
+) -> Result<QualityCheckResult, String> {
+    let use_ssim = match metric_override.as_deref() {
+        Some("SSIMULACRA2") => true,
+        Some("VMAF") => false,
+        _ => matches!(video_type, VideoType::Animation | VideoType::Rendered),
+    };
+
+    if use_ssim {
+        info!("Quality check (denoised): using SSIMULACRA2");
+        let score = calculate_ssimulacra2(
+            reference_path, encoded_path, 0.0, duration,
+            width, height, force_vfr_fix, ignore_noise, video_info,
+            salt, cancel_flag, child_pid,
+        )?;
+        let passed = score >= target_ssimulacra2;
+        info!("Quality check (denoised): SSIMULACRA2={:.1} (target > {:.1}) {}",
+            score, target_ssimulacra2, if passed { "PASSED" } else { "FAILED" });
+        Ok(QualityCheckResult {
+            score,
+            metric: "SSIMULACRA2".to_string(),
+        })
+    } else {
+        info!("Quality check (denoised): using VMAF (model vmaf_v0.6.1neg)");
+        let score = calculate_vmaf(
+            reference_path, encoded_path, 0.0, duration,
+            n_subsample, width, video_info, force_vfr_fix, false,
+            ignore_noise, cancel_flag, child_pid,
+        );
+        if score < 0.0 {
+            return Err(format!("VMAF calculation failed (score={})", score));
+        }
+        let passed = score >= target_vmaf;
+        info!("Quality check (denoised): VMAF={:.1} (target > {:.1}) {}",
+            score, target_vmaf, if passed { "PASSED" } else { "FAILED" });
+        Ok(QualityCheckResult {
+            score,
+            metric: "VMAF".to_string(),
+        })
+    }
+}
+
+pub(crate) fn calculate_ssimulacra2(
     original_path: &str,
     encoded_path: &str,
     start_time: f64,
@@ -82,11 +144,12 @@ fn calculate_ssimulacra2(
     force_vfr_fix: bool,
     ignore_noise: bool,
     video_info: &crate::ffmpeg::probe::VideoInfo,
+    salt: u64,
     cancel_flag: Arc<AtomicBool>,
     child_pid: Option<PidTracker>,
 ) -> Result<f64, String> {
     let tmp_dir = std::env::temp_dir();
-    let ts_ms = (start_time * 1000.0) as u64;
+    let ts_ms = salt;
     let orig_ppm = tmp_dir.join(format!("ssim_orig_{}_{}.ppm", std::process::id(), ts_ms));
     let dist_ppm = tmp_dir.join(format!("ssim_dist_{}_{}.ppm", std::process::id(), ts_ms));
 
@@ -157,10 +220,10 @@ fn build_ssim_grade_filters(
         vf_filters.push("hqdn3d=12:9:14:12,gblur=sigma=0.6".to_string());
     }
 
-    // Возвращаем спасительный даунскейл (скорость + низкочастотный фильтр для человеческого зрения)
-    if orig_width > 1280 {
-        vf_filters.push("scale=1280:-1:flags=bicubic".to_string());
-    } else if orig_width > 0 && orig_height > 0 {
+    // Оценка в полном разрешении: даунскейл до 1280 прятал артефакты сжатия и делал
+    // кривую CRF->score пологой. Нормализация к точным размерам источника (no-op на
+    // исходных размерах, выравнивает pad искажённого чанка).
+    if orig_width > 0 && orig_height > 0 {
         vf_filters.push(format!("scale={}:{}", orig_width, orig_height));
     } else {
         vf_filters.push("scale=-1:720:flags=bicubic".to_string());
@@ -248,10 +311,10 @@ fn extract_frame_for_ssim(
         vf_filters.push("hqdn3d=12:9:14:12,gblur=sigma=0.6".to_string());
     }
 
-    // Возвращаем спасительный даунскейл (скорость + низкочастотный фильтр для человеческого зрения)
-    if orig_width > 1280 {
-        vf_filters.push("scale=1280:-1:flags=bicubic".to_string());
-    } else if orig_width > 0 && orig_height > 0 {
+    // Оценка в полном разрешении: даунскейл до 1280 прятал артефакты сжатия и делал
+    // кривую CRF->score пологой. Нормализация к точным размерам источника (no-op на
+    // исходных размерах, выравнивает pad искажённого чанка).
+    if orig_width > 0 && orig_height > 0 {
         vf_filters.push(format!("scale={}:{}", orig_width, orig_height));
     } else {
         vf_filters.push("scale=-1:720:flags=bicubic".to_string());

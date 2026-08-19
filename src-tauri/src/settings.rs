@@ -20,10 +20,20 @@ pub struct Settings {
     pub skip_min_crf_enabled: bool,
     #[serde(default = "default_min_crf")]
     pub skip_min_crf_value: f64,
-    #[serde(default = "default_false")]
-    pub vmaf_ignore_noise: bool,
+    #[serde(default = "default_false", alias = "vmaf_ignore_noise")]
+    pub ignore_noise_for_tests: bool,
     #[serde(default = "default_zero")]
     pub parallel_workers: usize,
+    #[serde(default = "default_true")]
+    pub parallel_denoise: bool,
+    #[serde(default = "default_true")]
+    pub denoise_enabled: bool,
+    #[serde(default = "default_denoise_grain_threshold")]
+    pub denoise_grain_threshold: f64,
+    #[serde(default = "default_zero")]
+    pub denoise_max_threads: usize,
+    #[serde(default = "default_zero")]
+    pub denoise_max_segments: usize,
 }
 
 fn default_locale() -> String {
@@ -50,6 +60,10 @@ fn default_zero() -> usize {
     0
 }
 
+fn default_denoise_grain_threshold() -> f64 {
+    crate::video_processor::grain::GRAIN_HEAVY_THRESHOLD
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -62,8 +76,13 @@ impl Default for Settings {
             skip_min_diff_percent: 5.0,
             skip_min_crf_enabled: true,
             skip_min_crf_value: 24.0,
-            vmaf_ignore_noise: false,
+            ignore_noise_for_tests: false,
             parallel_workers: 0,
+            parallel_denoise: true,
+            denoise_enabled: true,
+            denoise_grain_threshold: default_denoise_grain_threshold(),
+            denoise_max_threads: 0,
+            denoise_max_segments: 0,
         }
     }
 }
