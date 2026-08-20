@@ -71,8 +71,11 @@ export default function OperationTabs(props: Props) {
           </div>
           <div className="op-row">
             <label>Encoding:</label>
-            <label><input type="radio" checked={!props.useHardware} onChange={() => props.setUseHardware(false)} /> Software (CPU)</label>
-            <label><input type="radio" checked={props.useHardware} onChange={() => props.setUseHardware(true)} /> Hardware (NVENC)</label>
+            <label><input type="radio" checked={!props.useHardware} onChange={() => props.setUseHardware(false)} disabled={props.selectedCodec === 'libsvtav1'} /> Software (CPU)</label>
+            <label><input type="radio" checked={props.useHardware} onChange={() => props.setUseHardware(true)} disabled={props.selectedCodec === 'libsvtav1'} /> Hardware (NVENC)</label>
+            {props.selectedCodec === 'libsvtav1' && (
+              <span className="hint">AV1: software only (SVT-AV1), 10-bit, film-grain, Opus audio</span>
+            )}
           </div>
           <div className="op-row">
             <label>Preset:</label>

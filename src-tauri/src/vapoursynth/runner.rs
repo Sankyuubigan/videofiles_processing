@@ -84,29 +84,35 @@ fn encode_codec_args(
     preset: &str,
     use_hardware: bool,
     video_type: &VideoType,
+    grain_ydif: Option<f64>,
+    svtav1_lp: Option<usize>,
 ) -> Vec<String> {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
     let crf_s = crf.to_string();
-    let mut v = Vec::new();
+    let mut v: Vec<String> = Vec::new();
     match codec {
         "libvpx-vp9" => {
             if use_hardware && has_nvenc {
-                v.extend(["-c:v", "vp9_nvenc", "-crf", &crf_s, "-b:v", "0"]);
+                v.extend(["-c:v", "vp9_nvenc", "-crf", &crf_s, "-b:v", "0"].map(String::from));
             } else {
                 v.extend([
                     "-c:v", "libvpx-vp9", "-crf", &crf_s, "-b:v", "0", "-deadline", "good",
                     "-cpu-used", "2",
-                ]);
+                ].map(String::from));
             }
+        }
+        "libsvtav1" => {
+            v.extend(["-c:v", "libsvtav1", "-crf", &crf_s, "-preset", preset].map(String::from));
+            v.extend(crate::av1::svtav1_args(video_type, grain_ydif, svtav1_lp));
         }
         "libx265" => {
             if use_hardware && has_nvenc {
-                v.extend(["-c:v", "hevc_nvenc", "-crf", &crf_s, "-preset", "p6", "-tune", "ll"]);
+                v.extend(["-c:v", "hevc_nvenc", "-crf", &crf_s, "-preset", "p6", "-tune", "ll"].map(String::from));
             } else {
-                v.extend(["-c:v", "libx265", "-crf", &crf_s, "-preset", preset]);
+                v.extend(["-c:v", "libx265", "-crf", &crf_s, "-preset", preset].map(String::from));
                 if matches!(video_type, VideoType::Animation) {
-                    v.extend(["-x265-params", "aq-mode=3:bframes=8:psy-rd=1.0"]);
+                    v.extend(["-x265-params", "aq-mode=3:bframes=8:psy-rd=1.0"].map(String::from));
                 }
             }
         }
@@ -114,16 +120,16 @@ fn encode_codec_args(
             if use_hardware && has_nvenc {
                 v.extend([
                     "-c:v", "h264_nvenc", "-cq", &crf_s, "-preset", "p6", "-tune", "ll",
-                ]);
+                ].map(String::from));
             } else {
-                v.extend(["-c:v", "libx264", "-crf", &crf_s, "-preset", preset]);
+                v.extend(["-c:v", "libx264", "-crf", &crf_s, "-preset", preset].map(String::from));
                 if matches!(video_type, VideoType::Animation) {
-                    v.extend(["-tune", "animation"]);
+                    v.extend(["-tune", "animation"].map(String::from));
                 }
             }
         }
     }
-    v.iter().map(|s| s.to_string()).collect()
+    v
 }
 
 /// Runs `vspipe -c y4m <vpy> -` piped into `ffmpeg <ffmpeg_args>`, capturing
@@ -447,7 +453,10 @@ pub fn run_denoise_encode_single(
     if include_subs {
         args.extend(["-map".to_string(), "1:s?".to_string()]);
     }
-    args.extend(encode_codec_args(codec, crf, preset, use_hardware, video_type));
+    args.extend(encode_codec_args(codec, crf, preset, use_hardware, video_type, video_info.grain_ydif, None));
+    if codec == "libsvtav1" {
+        args.extend(crate::ffmpeg::encode::svtav1_crf_metadata(crf, output_format));
+    }
     args.extend(["-c:a".to_string(), "copy".to_string()]);
     if include_subs {
         args.extend(["-c:s".to_string(), subs_codec.to_string()]);
@@ -564,7 +573,7 @@ pub fn run_denoise_encode_segmented(
                     "-threads".to_string(),
                     threads_per.to_string(),
                 ];
-                args.extend(encode_codec_args(&codec, crf, &preset, use_hardware, &vt));
+                args.extend(encode_codec_args(&codec, crf, &preset, use_hardware, &vt, vi.grain_ydif, Some(threads_per)));
                 args.extend(["-y".to_string(), out_s.clone()]);
                 let res = run_piped(
                     &vpy_s,
@@ -656,6 +665,9 @@ pub fn run_denoise_encode_segmented(
     if include_subs {
         concat_args.extend(["-c:s".to_string(), "copy".to_string()]);
     }
+    if codec == "libsvtav1" {
+        concat_args.extend(crate::ffmpeg::encode::svtav1_crf_metadata(crf, output_format));
+    }
     concat_args.extend(["-y".to_string(), output_path.to_string()]);
 
     let concat_res = run_command_simple(&concat_args, cancel_flag.clone(), child_pid.clone());
@@ -745,7 +757,7 @@ pub fn run_encode_from_ref(
         "-threads".to_string(),
         threads.max(1).to_string(),
     ];
-    args.extend(encode_codec_args(codec, crf, preset, use_hardware, video_type));
+    args.extend(encode_codec_args(codec, crf, preset, use_hardware, video_type, None, Some(threads.max(1))));
     args.extend(["-y".to_string(), out_path.to_string()]);
     let res = crate::ffmpeg::core::run_command_simple(&args, cancel_flag, child_pid);
     if res.success {

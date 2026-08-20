@@ -103,12 +103,13 @@ pub fn grade_chunk(
     target_ssimulacra2: f64,
     cancel_flag: Arc<AtomicBool>,
     child_pid: Option<PidTracker>,
+    svtav1_lp: Option<usize>,
 ) -> StepChunkOutcome {
     let encode_result = encode_chunk(
         input_path, chunk_path, ts, chunk_duration,
         codec, crf_value, preset_value, use_hardware,
         video_info, video_type, force_vfr_fix,
-        cancel_flag.clone(), child_pid.clone(),
+        cancel_flag.clone(), child_pid.clone(), svtav1_lp,
     );
     if !encode_result.success {
         if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
@@ -173,13 +174,14 @@ pub fn test_chunk(
     force_metric: Option<String>,
     cancel_flag: Arc<AtomicBool>,
     child_pid: Option<PidTracker>,
+    svtav1_lp: Option<usize>,
 ) -> TestChunkOutcome {
     let start = std::time::Instant::now();
     let result = encode_chunk(
         input_path, chunk_path, ts, chunk_duration,
         codec, crf_value, preset_value, use_hardware,
         video_info, video_type, force_vfr_fix,
-        cancel_flag.clone(), child_pid.clone(),
+        cancel_flag.clone(), child_pid.clone(), svtav1_lp,
     );
     let encode_seconds = start.elapsed().as_secs_f64();
 

@@ -1,6 +1,7 @@
 mod config;
 mod settings;
 mod ffmpeg;
+mod av1;
 mod video_processor;
 mod crf_extractor;
 mod estimator;

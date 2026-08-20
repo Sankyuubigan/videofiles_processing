@@ -186,6 +186,36 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
       </div>
 
       <div className="settings-group">
+        <h3>{t('settings.av1')}</h3>
+        <div className="settings-row">
+          <div className="checkbox-row">
+            <input
+              type="checkbox"
+              id="av1ContentPresets"
+              checked={localSettings.av1_use_content_presets}
+              onChange={(e) => autoSave({ ...localSettings, av1_use_content_presets: e.target.checked })}
+            />
+            <label htmlFor="av1ContentPresets">{t('settings.av1_use_content_presets')}</label>
+          </div>
+        </div>
+        <div className="settings-row">
+          <label>{t('settings.av1_film_grain')}</label>
+          <select
+            value={localSettings.av1_film_grain}
+            onChange={(e) => autoSave({ ...localSettings, av1_film_grain: parseInt(e.target.value) })}
+          >
+            <option value={-1}>{t('settings.av1_film_grain_auto')}</option>
+            <option value={0}>0 (none)</option>
+            <option value={4}>4 (anime)</option>
+            <option value={8}>8 (film)</option>
+            <option value={12}>12 (heavy)</option>
+            <option value={15}>15 (extreme)</option>
+          </select>
+          <span className="hint">{t('settings.av1_film_grain_hint')}</span>
+        </div>
+      </div>
+
+      <div className="settings-group">
         <h3>{t('settings.auto_skip')}</h3>
         <div className="settings-row">
           <div className="checkbox-row">

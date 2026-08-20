@@ -18,6 +18,8 @@ const DEFAULT_SETTINGS: Settings = {
   denoise_grain_threshold: 4.0,
   denoise_max_threads: 0,
   denoise_max_segments: 0,
+  av1_use_content_presets: true,
+  av1_film_grain: -1,
 };
 
 export function useSettings() {

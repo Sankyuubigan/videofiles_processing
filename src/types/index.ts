@@ -68,6 +68,8 @@ export interface Settings {
   denoise_grain_threshold: number;
   denoise_max_threads: number;
   denoise_max_segments: number;
+  av1_use_content_presets: boolean;
+  av1_film_grain: number;
 }
 
 export type Locale = 'en' | 'ru';

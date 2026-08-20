@@ -75,7 +75,9 @@ pub fn generate_denoise_vpy(
     let source_call = source.source_call(&input_esc);
 
     let trim_block = match trim {
-        Some((first, last)) => format!("\nsrc = src.std.Trim(first={first}, last={last})"),
+        Some((first, last)) => format!(
+            "\nsrc = src.std.Trim(first={first}, last=min({last}, src.num_frames - 1))"
+        ),
         None => String::new(),
     };
 

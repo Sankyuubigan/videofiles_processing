@@ -231,7 +231,7 @@ pub fn compress_video(
                 let final_cb = progress_cb.clone();
                 let result3 = compress_video_core_full_map(
                     input_path, &output_str, output_format, codec, actual_crf,
-                    preset_value, duration, cancel_flag, final_cb, child_pid.clone(),
+                    preset_value, duration, video_type, video_info.grain_ydif, cancel_flag, final_cb, child_pid.clone(),
                 );
                 if !result3.success {
                     error!("All compress attempts failed for {}: {}", input_path, result3.message);

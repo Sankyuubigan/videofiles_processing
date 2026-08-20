@@ -28,11 +28,6 @@ fn get_content_type_flags(video_type: &VideoType, codec: &str, use_hardware: boo
                         "-x265-params".to_string(), "aq-mode=3:bframes=8:psy-rd=1.0".to_string(),
                     ]);
                 }
-                "libsvtav1" => {
-                    flags.extend(vec![
-                        "-svtav1-params".to_string(), "tune=0".to_string(),
-                    ]);
-                }
                 "libx264" => {
                     flags.extend(vec![
                         "-tune".to_string(), "animation".to_string(),
@@ -46,6 +41,60 @@ fn get_content_type_flags(video_type: &VideoType, codec: &str, use_hardware: boo
     }
 
     flags
+}
+
+/// `-c:v libsvtav1` аргументы: числовой preset, CRF и параметры из av1-модуля
+/// (keyint=10s, tune, scd, film-grain, 10-bit pix_fmt). Hardware для AV1 не используется.
+fn svtav1_encode_args(crf_value: i32, preset_value: &str, video_type: &VideoType, grain_ydif: Option<f64>, lp: Option<usize>) -> Vec<String> {
+    let mut args = vec![
+        "-c:v".to_string(),
+        "libsvtav1".to_string(),
+        "-crf".to_string(),
+        crf_value.to_string(),
+        "-preset".to_string(),
+        preset_value.to_string(),
+    ];
+    args.extend(crate::av1::svtav1_args(video_type, grain_ydif, lp));
+    args
+}
+
+/// Для libsvtav1 FFmpeg не пишет Encoded_Library_Settings (в отличие от x264/x265),
+/// поэтому медиаинфо/ffprobe не могут найти CRF в готовом файле. Пишем его сами:
+/// MP4 -> stream tag `EncoderSettings`, MKV/WebM -> format tag `ENCODER_SETTINGS`
+/// (те же ключи, что у libx264, чтобы crf_extractor и mediainfo их распознали).
+pub(crate) fn svtav1_crf_metadata(crf_value: i32, output_format: &str) -> Vec<String> {
+    if output_format == "mkv" || output_format == "webm" {
+        vec![
+            "-metadata".to_string(),
+            format!("ENCODER_SETTINGS=crf={}", crf_value),
+        ]
+    } else {
+        vec![
+            "-metadata:s:v:0".to_string(),
+            format!("EncoderSettings=crf={}", crf_value),
+        ]
+    }
+}
+
+/// Аудио-кодеки: Opus 112k стерео для AV1/VP9 (дока), иначе AAC 192k.
+fn audio_args(codec: &str) -> Vec<String> {
+    if codec == "libsvtav1" || codec == "libvpx-vp9" {
+        vec![
+            "-c:a".to_string(),
+            "libopus".to_string(),
+            "-b:a".to_string(),
+            "112k".to_string(),
+            "-ac".to_string(),
+            "2".to_string(),
+        ]
+    } else {
+        vec![
+            "-c:a".to_string(),
+            "aac".to_string(),
+            "-b:a".to_string(),
+            "192k".to_string(),
+        ]
+    }
 }
 
 pub fn fix_vfr_target_crf(
@@ -64,8 +113,9 @@ pub fn fix_vfr_target_crf(
     cmd.extend(["-i".to_string(), input_path.to_string()]);
     let mut vf_filters = vec![format!("fps={}", video_info.vfr_fix_fps)];
     
-    // Не используем yuv420p для 10-bit источников (потому что цвет оставляем как есть)
-    if video_info.is_10bit && codec != "libx265" {
+    // Не используем yuv420p для 10-bit источников (потому что цвет оставляем как есть).
+    // Для libsvtav1 битность задаётся через `-pix_fmt yuv420p10le` (av1-модуль).
+    if video_info.is_10bit && codec != "libx265" && codec != "libsvtav1" {
         vf_filters.push("format=yuv420p".to_string());
     }
     
@@ -77,6 +127,11 @@ pub fn fix_vfr_target_crf(
             } else {
                 cmd.extend(["-c:v".to_string(), "libvpx-vp9".to_string(), "-crf".to_string(), crf_value.to_string(), "-b:v".to_string(), "0".to_string(), "-deadline".to_string(), "good".to_string(), "-cpu-used".to_string(), "2".to_string()]);
             }
+            cmd.extend(["-c:a".to_string(), "copy".to_string()]);
+        }
+        "libsvtav1" => {
+            cmd.extend(svtav1_encode_args(crf_value, preset_value, video_type, video_info.grain_ydif, None));
+            cmd.extend(svtav1_crf_metadata(crf_value, output_format));
             cmd.extend(["-c:a".to_string(), "copy".to_string()]);
         }
         "libx265" => {
@@ -137,11 +192,12 @@ pub fn fix_vfr_only_core(
     };
 
     let mut vf_filters = vec![format!("fps={}", video_info.vfr_fix_fps)];
-    // 10-бит сохраняем как есть для libx265, остальным кодеком оставляем глубину yuv420p
+    // 10-бит сохраняем как есть для libx265, остальным кодеком оставляем глубину yuv420p.
+    // Для libsvtav1 битность задаётся через `-pix_fmt yuv420p10le` (av1-модуль).
     if video_info.is_10bit && encoder != "libx265" {
         if encoder == "libx264" {
             vf_filters.push("format=yuv420p10le".to_string());
-        } else {
+        } else if encoder != "libsvtav1" {
             vf_filters.push("format=yuv420p".to_string());
         }
     }
@@ -157,6 +213,10 @@ pub fn fix_vfr_only_core(
         }
         "libsvtav1" => {
             cmd.extend(["-c:v".to_string(), "libsvtav1".to_string(), "-crf".to_string(), "16".to_string(), "-preset".to_string(), "6".to_string()]);
+            cmd.extend(crate::av1::svtav1_args(&video_info.video_type, video_info.grain_ydif, None));
+            let out_fmt = std::path::Path::new(output_path)
+                .extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+            cmd.extend(svtav1_crf_metadata(16, &out_fmt));
         }
         _ => {
             cmd.extend(["-c:v".to_string(), "libx264".to_string(), "-crf".to_string(), crf.to_string(), "-preset".to_string(), "slow".to_string()]);
@@ -189,7 +249,7 @@ pub fn compress_video_core(
     cmd.extend(["-i".to_string(), input_path.to_string()]);
     let mut vf_filters = Vec::new();
     
-    if video_info.is_10bit && codec != "libx265" {
+    if video_info.is_10bit && codec != "libx265" && codec != "libsvtav1" {
         vf_filters.push("format=yuv420p".to_string());
     }
     if codec == "libx264" && !use_hardware {
@@ -214,6 +274,13 @@ pub fn compress_video_core(
                 cmd.extend(get_content_type_flags(video_type, codec, use_hardware, has_nvenc));
             }
         }
+        "libsvtav1" => {
+            if use_hardware {
+                warn!("Hardware encoding is not available for AV1, using software SVT-AV1");
+            }
+            cmd.extend(svtav1_encode_args(crf_value, preset_value, video_type, video_info.grain_ydif, None));
+            cmd.extend(svtav1_crf_metadata(crf_value, output_format));
+        }
         _ => {
             if use_hardware && has_nvenc {
                 cmd.extend(["-c:v".to_string(), "h264_nvenc".to_string(), "-cq".to_string(), crf_value.to_string(), "-preset".to_string(), "p6".to_string(), "-tune".to_string(), "ll".to_string(), "-spatial_aq".to_string(), "1".to_string(), "-temporal_aq".to_string(), "1".to_string(), "-rc-lookahead".to_string(), "20".to_string(), "-aq-strength".to_string(), "15".to_string()]);
@@ -223,7 +290,7 @@ pub fn compress_video_core(
             }
         }
     }
-    cmd.extend(["-c:a".to_string(), "aac".to_string(), "-b:a".to_string(), "192k".to_string()]);
+    cmd.extend(audio_args(codec));
     if video_info.has_subtitles {
         if output_format == "mp4" {
             cmd.extend(["-c:s".to_string(), "mov_text".to_string()]);
@@ -254,14 +321,32 @@ pub fn compress_video_core_no_subtitles(
 }
 
 pub fn compress_video_core_full_map(
-    input_path: &str, output_path: &str, _output_format: &str, _codec: &str, crf_value: i32,
-    preset_value: &str, duration_seconds: f64,
+    input_path: &str, output_path: &str, output_format: &str, codec: &str, crf_value: i32,
+    preset_value: &str, duration_seconds: f64, video_type: &VideoType, grain_ydif: Option<f64>,
     cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     child_pid: Option<PidTracker>,
 ) -> RunResult {
     let mut cmd = vec!["ffmpeg".to_string(), "-y".to_string(), "-i".to_string(), input_path.to_string()];
-    cmd.extend(["-c:v".to_string(), "libx264".to_string(), "-crf".to_string(), crf_value.to_string(), "-preset".to_string(), preset_value.to_string(), "-c:a".to_string(), "aac".to_string(), "-b:a".to_string(), "192k".to_string()]);
+    match codec {
+        "libsvtav1" => {
+            cmd.extend(svtav1_encode_args(crf_value, preset_value, video_type, grain_ydif, None));
+            cmd.extend(svtav1_crf_metadata(crf_value, output_format));
+        }
+        "libvpx-vp9" => cmd.extend([
+            "-c:v".to_string(), "libvpx-vp9".to_string(), "-crf".to_string(), crf_value.to_string(),
+            "-b:v".to_string(), "0".to_string(), "-deadline".to_string(), "good".to_string(), "-cpu-used".to_string(), "2".to_string(),
+        ]),
+        "libx265" => cmd.extend([
+            "-c:v".to_string(), "libx265".to_string(), "-crf".to_string(), crf_value.to_string(),
+            "-preset".to_string(), preset_value.to_string(),
+        ]),
+        _ => cmd.extend([
+            "-c:v".to_string(), "libx264".to_string(), "-crf".to_string(), crf_value.to_string(),
+            "-preset".to_string(), preset_value.to_string(),
+        ]),
+    }
+    cmd.extend(audio_args(codec));
     cmd.extend(["-map".to_string(), "0".to_string(), "-map".to_string(), "-0:d".to_string(), "-progress".to_string(), "pipe:1".to_string(), output_path.to_string()]);
     run_command_with_progress(&cmd, Some(duration_seconds), "Compress (fallback)", cancel_flag, progress_cb, child_pid)
 }
@@ -272,6 +357,7 @@ pub fn encode_chunk(
     video_info: &super::probe::VideoInfo, video_type: &VideoType, force_vfr_fix: bool,
     cancel_flag: Arc<AtomicBool>,
     child_pid: Option<PidTracker>,
+    svtav1_lp: Option<usize>,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -294,7 +380,7 @@ pub fn encode_chunk(
     if needs_fix {
         vf_filters.push(format!("fps={}", video_info.vfr_fix_fps));
     }
-    if video_info.is_10bit && codec != "libx265" {
+    if video_info.is_10bit && codec != "libx265" && codec != "libsvtav1" {
         vf_filters.push("format=yuv420p".to_string());
     }
     if codec == "libx264" && !use_hardware && !needs_fix {
@@ -320,6 +406,9 @@ pub fn encode_chunk(
                 cmd.extend(["-c:v".to_string(), "libx265".to_string(), "-crf".to_string(), crf_value.to_string(), "-preset".to_string(), preset_value.to_string()]);
                 cmd.extend(get_content_type_flags(video_type, codec, use_hardware, has_nvenc));
             }
+        }
+        "libsvtav1" => {
+            cmd.extend(svtav1_encode_args(crf_value, preset_value, video_type, video_info.grain_ydif, svtav1_lp));
         }
         _ => {
             if use_hardware && has_nvenc {

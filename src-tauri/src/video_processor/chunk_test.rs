@@ -268,6 +268,11 @@ pub fn find_best_crf(
     // are encoded from these lossless references instead of re-running BM3D.
     let usable = crate::vapoursynth::runner::denoise_usable_cores();
     let denoise_workers = effective_workers(timestamps.len(), use_hardware).min(usable);
+    let denoise_workers = if codec == "libsvtav1" {
+        crate::av1::cap_parallel_workers(denoise_workers, width, height)
+    } else {
+        denoise_workers
+    };
     let ref_vs_threads = crate::vapoursynth::runner::denoise_vs_threads_for_workers(denoise_workers);
     let denoise_refs: Vec<Option<String>> = match &denoise {
         Some(d) => build_denoise_references(d, &timestamps, chunk_duration, cancel_flag.clone(), child_pid.clone(), denoise_workers, ref_vs_threads),
@@ -286,9 +291,19 @@ pub fn find_best_crf(
     let denoise_run_workers = if use_denoise {
         denoise_workers
     } else {
-        effective_workers(timestamps.len(), use_hardware)
+        let base = effective_workers(timestamps.len(), use_hardware);
+        if codec == "libsvtav1" {
+            crate::av1::cap_parallel_workers(base, width, height)
+        } else {
+            base
+        }
     };
     let encode_threads = crate::vapoursynth::runner::denoise_vs_threads_for_workers(denoise_run_workers);
+    let svtav1_lp = if codec == "libsvtav1" {
+        Some(crate::av1::av1_lp_for_workers(denoise_run_workers))
+    } else {
+        None
+    };
     let parallel = timestamps.len() > 1;
 
     let mut best_crf_closest = codec_info.crf_default;
@@ -335,6 +350,7 @@ pub fn find_best_crf(
                         vmaf_subsample, width, height, force_vfr_fix, pad_applied,
                         settings.ignore_noise_for_tests, target_vmaf, target_ssimulacra2,
                         cancel_flag.clone(), child_pid.as_ref().map(|t| t.fork()),
+                        svtav1_lp,
                     )
                 }
             });
@@ -427,7 +443,7 @@ pub fn find_best_crf(
                     let result = encode_chunk(
                         input_path, &chunk_str, *ts, chunk_duration,
                         codec, mid_crf, preset_value, use_hardware, &video_info, video_type, force_vfr_fix,
-                        cancel_flag.clone(), child_pid.clone(),
+                        cancel_flag.clone(), child_pid.clone(), svtav1_lp,
                     );
                     if !result.success {
                         if cancel_flag.load(Ordering::Relaxed) {
@@ -622,6 +638,11 @@ pub fn run_chunk_test(
 
     let usable = crate::vapoursynth::runner::denoise_usable_cores();
     let denoise_workers = effective_workers(timestamps.len(), use_hardware).min(usable);
+    let denoise_workers = if codec == "libsvtav1" {
+        crate::av1::cap_parallel_workers(denoise_workers, width, height)
+    } else {
+        denoise_workers
+    };
     let ref_vs_threads = crate::vapoursynth::runner::denoise_vs_threads_for_workers(denoise_workers);
     let denoise_refs: Vec<Option<String>> = match &denoise {
         Some(d) => build_denoise_references(d, &timestamps, chunk_duration, cancel_flag.clone(), child_pid.clone(), denoise_workers, ref_vs_threads),
@@ -638,9 +659,19 @@ pub fn run_chunk_test(
     let denoise_run_workers = if use_denoise {
         denoise_workers
     } else {
-        effective_workers(timestamps.len(), use_hardware)
+        let base = effective_workers(timestamps.len(), use_hardware);
+        if codec == "libsvtav1" {
+            crate::av1::cap_parallel_workers(base, width, height)
+        } else {
+            base
+        }
     };
     let encode_threads = crate::vapoursynth::runner::denoise_vs_threads_for_workers(denoise_run_workers);
+    let svtav1_lp = if codec == "libsvtav1" {
+        Some(crate::av1::av1_lp_for_workers(denoise_run_workers))
+    } else {
+        None
+    };
     let parallel = timestamps.len() > 1;
 
     let temp_dir = std::env::temp_dir();
@@ -691,6 +722,7 @@ pub fn run_chunk_test(
                     settings.ignore_noise_for_tests, target_vmaf, target_ssimulacra2,
                     force_metric.clone(), cancel_flag.clone(),
                     child_pid.as_ref().map(|t| t.fork()),
+                    svtav1_lp,
                 )
             }
         });
@@ -769,7 +801,7 @@ pub fn run_chunk_test(
                 let result = encode_chunk(
                     input_path, &out_str, *ts, chunk_duration,
                     codec, actual_crf, preset_value, use_hardware, &video_info, video_type, force_vfr_fix,
-                    cancel_flag.clone(), child_pid.clone(),
+                    cancel_flag.clone(), child_pid.clone(), svtav1_lp,
                 );
                 encode_time_total += start.elapsed().as_secs_f64();
 

@@ -12,6 +12,10 @@ pub const DEFAULT_MIN_CRF_VP9: i32 = 15;
 pub const DEFAULT_MAX_CRF_VP9: i32 = 50;
 pub const DEFAULT_CRF_VP9: i32 = 28;
 
+pub const DEFAULT_MIN_CRF_AV1: i32 = 15;
+pub const DEFAULT_MAX_CRF_AV1: i32 = 40;
+pub const DEFAULT_CRF_AV1: i32 = 26;
+
 pub const _DEFAULT_FIX_CRF_VP9: i32 = 30;
 pub const _DEFAULT_FIX_CRF_H264: i32 = 28;
 pub const _DEFAULT_FIX_CRF_H265: i32 = 30;
@@ -22,10 +26,12 @@ pub const _DEFAULT_USE_HARDWARE_ENCODING: bool = false;
 pub const H264_PRESETS: &[&str] = &["veryslow", "slower", "slow", "medium", "fast", "faster", "veryfast", "superfast", "ultrafast"];
 pub const H265_PRESETS: &[&str] = &["veryslow", "slower", "slow", "medium", "fast", "faster", "veryfast", "superfast", "ultrafast"];
 pub const VP9_PRESETS: &[&str] = &["veryslow", "slower", "slow", "medium", "fast", "faster", "veryfast", "superfast", "ultrafast"];
+pub const AV1_PRESETS: &[&str] = &["2", "4", "6", "8", "10", "12"];
 
 pub const DEFAULT_H264_PRESET: &str = "slow";
 pub const DEFAULT_H265_PRESET: &str = "slow";
 pub const DEFAULT_VP9_PRESET: &str = "slow";
+pub const DEFAULT_AV1_PRESET: &str = "6";
 
 pub const COMPRESSED_VIDEO_SUFFIX: &str = "_compressed";
 pub const TRIMMED_VIDEO_SUFFIX: &str = "_trimmed";
@@ -73,6 +79,14 @@ pub fn get_codecs() -> HashMap<String, CodecInfo> {
         crf_default: DEFAULT_CRF_VP9,
         presets: VP9_PRESETS.iter().map(|s| s.to_string()).collect(),
         preset_default: DEFAULT_VP9_PRESET.to_string(),
+    });
+    m.insert("libsvtav1".to_string(), CodecInfo {
+        name: "AV1 (SVT-AV1)".to_string(),
+        crf_min: DEFAULT_MIN_CRF_AV1,
+        crf_max: DEFAULT_MAX_CRF_AV1,
+        crf_default: DEFAULT_CRF_AV1,
+        presets: AV1_PRESETS.iter().map(|s| s.to_string()).collect(),
+        preset_default: DEFAULT_AV1_PRESET.to_string(),
     });
     m
 }

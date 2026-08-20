@@ -34,6 +34,10 @@ pub struct Settings {
     pub denoise_max_threads: usize,
     #[serde(default = "default_zero")]
     pub denoise_max_segments: usize,
+    #[serde(default = "default_true")]
+    pub av1_use_content_presets: bool,
+    #[serde(default = "default_neg_one")]
+    pub av1_film_grain: i32,
 }
 
 fn default_locale() -> String {
@@ -60,6 +64,10 @@ fn default_zero() -> usize {
     0
 }
 
+fn default_neg_one() -> i32 {
+    -1
+}
+
 fn default_denoise_grain_threshold() -> f64 {
     crate::video_processor::grain::GRAIN_HEAVY_THRESHOLD
 }
@@ -83,6 +91,8 @@ impl Default for Settings {
             denoise_grain_threshold: default_denoise_grain_threshold(),
             denoise_max_threads: 0,
             denoise_max_segments: 0,
+            av1_use_content_presets: true,
+            av1_film_grain: -1,
         }
     }
 }

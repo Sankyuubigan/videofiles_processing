@@ -33,11 +33,17 @@ export const CODECS: Record<string, CodecInfo> = {
     presets: ['veryslow','slower','slow','medium','fast','faster','veryfast','superfast','ultrafast'],
     presetDefault: 'slow',
   },
+  libsvtav1: {
+    name: 'AV1 (SVT-AV1)',
+    crfMin: 15, crfMax: 40, crfDefault: 26,
+    presets: ['2','4','6','8','10','12'],
+    presetDefault: '6',
+  },
 };
 
 export const OUTPUT_FORMATS: Record<string, FormatInfo> = {
-  mp4: { name: 'MP4', compatibleCodecs: ['libx264','libx265'], audioCodec: 'aac', defaultCodec: 'libx264' },
-  mkv: { name: 'MKV', compatibleCodecs: ['libx264','libx265'], audioCodec: 'aac', defaultCodec: 'libx264' },
+  mp4: { name: 'MP4', compatibleCodecs: ['libx264','libx265','libsvtav1'], audioCodec: 'aac', defaultCodec: 'libx264' },
+  mkv: { name: 'MKV', compatibleCodecs: ['libx264','libx265','libsvtav1'], audioCodec: 'aac', defaultCodec: 'libx264' },
   hevc: { name: 'HEVC', compatibleCodecs: ['libx265'], audioCodec: 'aac', defaultCodec: 'libx265' },
   webm: { name: 'WebM', compatibleCodecs: ['libvpx-vp9'], audioCodec: 'libopus', defaultCodec: 'libvpx-vp9' },
 };
