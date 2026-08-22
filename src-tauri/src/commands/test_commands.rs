@@ -5,7 +5,7 @@ use log::{error, warn};
 
 use crate::commands::file_commands::{FileQueueState, TestResult};
 use crate::video_processor::chunk_test::{run_chunk_test, ChunkTestResult};
-use crate::vapoursynth::denoise::{sigma_from_ydif, DenoiseSpec};
+use crate::vapoursynth::denoise::{denoise_sigma_for, DenoiseSpec};
 
 use super::compress_commands::ProcessingState;
 
@@ -97,16 +97,17 @@ pub async fn run_chunk_test_cmd(
             msg
         })?.clone();
         let settings = crate::settings::load_settings();
-        let sigma = sigma_from_ydif(file.info.as_ref().and_then(|i| i.grain_ydif), settings.denoise_grain_threshold);
-        let denoise = if settings.denoise_enabled {
-            sigma.map(|s| DenoiseSpec {
-                input: file.path.clone(),
-                sigma: s,
-                fps: file.info.as_ref().map(|i| i.fps).unwrap_or(0.0),
-            })
-        } else {
-            None
-        };
+        let sigma = file.info.as_ref().and_then(|i| {
+            denoise_sigma_for(&settings, &i.video_type, i.grain_ydif)
+        });
+        let denoise = sigma.map(|s| DenoiseSpec {
+            input: file.path.clone(),
+            sigma: s,
+            fps: file.info.as_ref().map(|i| i.fps).unwrap_or(0.0),
+            filter: file.info.as_ref()
+                .map(|i| crate::vapoursynth::denoise::DenoiseFilter::for_type(&i.video_type))
+                .unwrap_or(crate::vapoursynth::denoise::DenoiseFilter::Bm3d),
+        });
         (file.path.clone(), denoise)
     };
 
@@ -199,16 +200,17 @@ pub async fn run_batch_test(
         let codec = codec.clone();
         let preset = preset_value.clone();
         let settings = crate::settings::load_settings();
-        let sigma = sigma_from_ydif(file.info.as_ref().and_then(|i| i.grain_ydif), settings.denoise_grain_threshold);
-        let denoise = if settings.denoise_enabled {
-            sigma.map(|s| DenoiseSpec {
-                input: file.path.clone(),
-                sigma: s,
-                fps: file.info.as_ref().map(|i| i.fps).unwrap_or(0.0),
-            })
-        } else {
-            None
-        };
+        let sigma = file.info.as_ref().and_then(|i| {
+            denoise_sigma_for(&settings, &i.video_type, i.grain_ydif)
+        });
+        let denoise = sigma.map(|s| DenoiseSpec {
+            input: file.path.clone(),
+            sigma: s,
+            fps: file.info.as_ref().map(|i| i.fps).unwrap_or(0.0),
+            filter: file.info.as_ref()
+                .map(|i| crate::vapoursynth::denoise::DenoiseFilter::for_type(&i.video_type))
+                .unwrap_or(crate::vapoursynth::denoise::DenoiseFilter::Bm3d),
+        });
         let progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>> = {
             let app = app.clone();
             Some(Arc::new(move |percent: i32, message: String| {

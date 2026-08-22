@@ -1,11 +1,11 @@
-import { FileEntry } from '../../types';
+import { FileEntry, DenoiseThresholds } from '../../types';
 import { formatFileSize, formatDuration } from '../../constants/codecs';
 import { t } from '../../i18n';
 
 interface Props {
   files: FileEntry[];
   selectedIndex: number;
-  grainThreshold: number;
+  grainThresholds: DenoiseThresholds;
   onSelect: (i: number) => void;
   onRemove: (path: string) => void;
   onVideoTypeChange: (path: string, videoType: string) => void;
@@ -56,13 +56,16 @@ function getEstTimeDisplay(info: FileEntry): string {
 }
 
 const GRAIN_CLEAN_THRESHOLD = 1.5;
+const GRAIN_REFERENCE_THRESHOLD = 4.0;
 
-function getGrainDisplay(info: FileEntry, grainThreshold: number): { text: string; class: string; title?: string } {
+function getGrainDisplay(info: FileEntry, grainThresholds: DenoiseThresholds): { text: string; class: string; title?: string } {
   const ydif = info.info?.grain_ydif;
   if (ydif === null || ydif === undefined) return { text: '--', class: '' };
   const title = `YDIF ${ydif.toFixed(2)}`;
+  const vt = info.info?.video_type;
+  const threshold = (vt && grainThresholds[vt] > 0) ? grainThresholds[vt] : GRAIN_REFERENCE_THRESHOLD;
   if (ydif < GRAIN_CLEAN_THRESHOLD) return { text: t('table.grain_clean'), class: 'cell-green', title };
-  if (ydif < grainThreshold) return { text: t('table.grain_medium'), class: 'cell-orange', title };
+  if (ydif < threshold) return { text: t('table.grain_medium'), class: 'cell-orange', title };
   return { text: t('table.grain_heavy'), class: 'cell-red', title };
 }
 
@@ -82,7 +85,7 @@ function isAnalyzing(info: FileEntry): boolean {
   return info.analysis_state === 'pending' || info.analysis_state === 'probing' || info.analysis_state === 'detecting';
 }
 
-export default function FileTable({ files, selectedIndex, grainThreshold, onSelect, onRemove, onVideoTypeChange }: Props) {
+export default function FileTable({ files, selectedIndex, grainThresholds, onSelect, onRemove, onVideoTypeChange }: Props) {
   if (files.length === 0) {
     return (
       <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>
@@ -111,7 +114,7 @@ export default function FileTable({ files, selectedIndex, grainThreshold, onSele
       <tbody>
         {files.map((file, i) => {
           const crfDisp = getCrfDisplay(file);
-          const grainDisp = getGrainDisplay(file, grainThreshold);
+          const grainDisp = getGrainDisplay(file, grainThresholds);
           const vfrDisp = getVfrDisplay(file);
           const estSizeDisp = getEstSizeDisplay(file);
           const vmafDisp = getVmafDisplay(file);

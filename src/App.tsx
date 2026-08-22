@@ -436,7 +436,11 @@ function App() {
             onTestFile={handleTestFile}
             onQualityCheck={handleQualityCheck}
             onVideoTypeChange={handleVideoTypeChange}
-            grainThreshold={settings.denoise_grain_threshold}
+            grainThresholds={{
+              Animation: settings.denoise_threshold_animation,
+              LiveAction: settings.denoise_threshold_liveaction,
+              Rendered: settings.denoise_threshold_rendered,
+            }}
             operationTab={operationTab}
             setOperationTab={setOperationTab}
             selectedFormat={selectedFormat}

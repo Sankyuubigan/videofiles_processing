@@ -26,10 +26,12 @@ pub struct Settings {
     pub parallel_workers: usize,
     #[serde(default = "default_true")]
     pub parallel_denoise: bool,
-    #[serde(default = "default_true")]
-    pub denoise_enabled: bool,
-    #[serde(default = "default_denoise_grain_threshold")]
-    pub denoise_grain_threshold: f64,
+    #[serde(default = "default_denoise_threshold")]
+    pub denoise_threshold_animation: f64,
+    #[serde(default = "default_denoise_threshold")]
+    pub denoise_threshold_liveaction: f64,
+    #[serde(default = "default_denoise_threshold")]
+    pub denoise_threshold_rendered: f64,
     #[serde(default = "default_zero")]
     pub denoise_max_threads: usize,
     #[serde(default = "default_zero")]
@@ -68,8 +70,8 @@ fn default_neg_one() -> i32 {
     -1
 }
 
-fn default_denoise_grain_threshold() -> f64 {
-    crate::video_processor::grain::GRAIN_HEAVY_THRESHOLD
+fn default_denoise_threshold() -> f64 {
+    4.0
 }
 
 impl Default for Settings {
@@ -87,8 +89,9 @@ impl Default for Settings {
             ignore_noise_for_tests: false,
             parallel_workers: 0,
             parallel_denoise: true,
-            denoise_enabled: true,
-            denoise_grain_threshold: default_denoise_grain_threshold(),
+            denoise_threshold_animation: default_denoise_threshold(),
+            denoise_threshold_liveaction: default_denoise_threshold(),
+            denoise_threshold_rendered: default_denoise_threshold(),
             denoise_max_threads: 0,
             denoise_max_segments: 0,
             av1_use_content_presets: true,

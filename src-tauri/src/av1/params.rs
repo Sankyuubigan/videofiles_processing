@@ -15,8 +15,14 @@ pub struct Av1Params {
 
 impl Av1Params {
     /// Собирает строку `-svtav1-params` (GOP 10s, VQ, scene change, film-grain).
+    /// `film-grain-denoise=1` велит кодеру реально удалить смоделированное зерно
+    /// из кадров перед кодированием (это и даёт экономию битрейта); работает
+    /// только когда film-grain включён (film-grain>0).
     pub fn svtav1_params(&self) -> String {
-        format!("keyint=10s:tune={}:scd=1:film-grain={}", self.tune, self.film_grain)
+        format!(
+            "keyint=10s:tune={}:scd=1:film-grain={}:film-grain-denoise=1",
+            self.tune, self.film_grain
+        )
     }
 }
 
@@ -82,7 +88,10 @@ pub fn svtav1_args(video_type: &VideoType, grain_ydif: Option<f64>, lp: Option<u
     } else {
         params.film_grain
     };
-    let mut svtav1 = format!("keyint=10s:tune={}:scd=1:film-grain={}", params.tune, film_grain);
+    let mut svtav1 = format!(
+        "keyint=10s:tune={}:scd=1:film-grain={}:film-grain-denoise=1",
+        params.tune, film_grain
+    );
     if let Some(lp) = lp {
         if lp > 0 {
             svtav1.push_str(&format!(":lp={}", lp));

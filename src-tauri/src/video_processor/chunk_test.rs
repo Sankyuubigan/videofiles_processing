@@ -79,6 +79,7 @@ fn build_denoise_references(
                     DenoiseSource::Lsmash,
                     Some((f0, f1 - 1)),
                     true,
+                    denoise.filter,
                     vs_threads,
                 );
                 if let Err(e) = std::fs::write(&ref_vpy_path, ref_vpy) {

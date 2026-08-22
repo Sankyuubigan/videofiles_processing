@@ -8,6 +8,14 @@ export interface AudioTrack {
   bit_rate: string;
 }
 
+export type VideoTypeName = 'Animation' | 'LiveAction' | 'Rendered';
+
+export interface DenoiseThresholds {
+  Animation: number;
+  LiveAction: number;
+  Rendered: number;
+}
+
 export interface VideoInfo {
   path: string;
   duration: number;
@@ -64,8 +72,9 @@ export interface Settings {
   skip_min_crf_value: number;
   ignore_noise_for_tests: boolean;
   parallel_denoise: boolean;
-  denoise_enabled: boolean;
-  denoise_grain_threshold: number;
+  denoise_threshold_animation: number;
+  denoise_threshold_liveaction: number;
+  denoise_threshold_rendered: number;
   denoise_max_threads: number;
   denoise_max_segments: number;
   av1_use_content_presets: boolean;

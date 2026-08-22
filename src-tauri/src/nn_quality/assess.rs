@@ -348,10 +348,15 @@ pub fn assess_video_quality(
     );
     match grain {
         Ok(g) => {
-            let threshold = settings.denoise_grain_threshold;
-            let avg = crate::video_processor::grain::grain_free_pct(g.ydif_median, threshold);
-            let best = crate::video_processor::grain::grain_free_pct(g.ydif_min, threshold);
-            let worst = crate::video_processor::grain::grain_free_pct(g.ydif_max, threshold);
+            let threshold = crate::vapoursynth::denoise::denoise_threshold_for(&settings, &video_info.video_type);
+            let score_threshold = if threshold > 0.0 {
+                threshold
+            } else {
+                crate::video_processor::grain::GRAIN_HEAVY_THRESHOLD
+            };
+            let avg = crate::video_processor::grain::grain_free_pct(g.ydif_median, score_threshold);
+            let best = crate::video_processor::grain::grain_free_pct(g.ydif_min, score_threshold);
+            let worst = crate::video_processor::grain::grain_free_pct(g.ydif_max, score_threshold);
             info!("Quality: summary -> grain (YDIF): median={:.2}, score={:.0}%", g.ydif_median, avg);
             let grain_agg = MetricSummary {
                 name: "Зерно (YDIF)".to_string(),

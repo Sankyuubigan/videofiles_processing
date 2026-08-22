@@ -253,7 +253,7 @@ async fn ensure_plugins<F: Fn(String) + Clone>(progress: F) -> Result<(), String
     }
 
     // 4. Install plugins and helper scripts (best effort)
-    for item in ["mvtools", "bm3d", "bm3dcuda", "ffms2", "fmtconv", "havsfunc", "mvsfunc", "lsmashsource"] {
+    for item in ["mvtools", "bm3d", "bm3dcuda", "knlmeanscl", "ffms2", "fmtconv", "havsfunc", "mvsfunc", "lsmashsource"] {
         progress(format!("Installing VapourSynth plugin/script: {}", item));
         let (code, out) = vsrepo(&["install", item]).await;
         if code != 0 {

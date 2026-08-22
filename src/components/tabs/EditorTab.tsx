@@ -1,4 +1,4 @@
-import { FileEntry, OperationTab, PreviewState } from '../../types';
+import { FileEntry, OperationTab, PreviewState, DenoiseThresholds } from '../../types';
 import { t } from '../../i18n';
 import FileTable from '../editor/FileTable';
 import OperationTabs from '../editor/OperationTabs';
@@ -9,7 +9,7 @@ interface Props {
   files: FileEntry[];
   selectedIndex: number;
   setSelectedIndex: (i: number) => void;
-  grainThreshold: number;
+  grainThresholds: DenoiseThresholds;
   isDragOver: boolean;
   onSelectFiles: () => void;
   onSelectOutputDir: () => void;
@@ -90,7 +90,7 @@ export default function EditorTab(props: Props) {
           <FileTable
             files={props.files}
             selectedIndex={props.selectedIndex}
-            grainThreshold={props.grainThreshold}
+            grainThresholds={props.grainThresholds}
             onSelect={props.setSelectedIndex}
             onRemove={props.onRemoveFile}
             onVideoTypeChange={props.onVideoTypeChange}

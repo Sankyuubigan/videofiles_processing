@@ -129,6 +129,7 @@ pub fn compress_video(
             input: input_path.to_string(),
             sigma: s,
             fps: video_info.fps,
+            filter: crate::vapoursynth::denoise::DenoiseFilter::for_type(&video_info.video_type),
         });
         let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix, child_pid.clone(), denoise_arg);
         if acrf.cancelled {
@@ -185,6 +186,7 @@ pub fn compress_video(
         } else {
             let vpy = generate_denoise_vpy(
                 input_path, video_info.fps, sigma, DenoiseSource::Ffms2, None, true,
+                crate::vapoursynth::denoise::DenoiseFilter::for_type(video_type),
                 denoise_vs_threads,
             );
             let vpy_path = env::temp_dir().join("denoise_run.vpy");

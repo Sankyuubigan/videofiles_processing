@@ -26,6 +26,16 @@ fn py_path(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+/// Maps measured grain (sigma, derived from median YDIF) to KNLMeansCL strength
+/// `h` for animation. Keeps `h` in the light 0.4-0.6 band recommended for anime
+/// (docs/task new settings.md): enough to clean studio BD grain, weak enough to
+/// preserve lineart.
+fn knlmeans_h(sigma: f64) -> f64 {
+    (sigma * 0.1).clamp(0.4, 0.6)
+}
+
+use crate::vapoursynth::denoise::DenoiseFilter;
+
 /// Source filter used to read the input frames.
 /// `ffms2` is fine for the single-pipe path; `lsmas` (LWLibavSource) is used
 /// for the segmented path because it does not write a sidecar index file, so
@@ -48,17 +58,20 @@ impl DenoiseSource {
     }
 }
 
-/// Generates a VapourSynth script that denoises via BM3D as the PRIMARY spatial
-/// denoiser at 8-bit depth. Running BM3D at 16-bit made `sigma` ~1000x too small
-/// to do anything; at 8-bit `sigma = YDIF` is meaningful. Output stays 8-bit and
-/// no `contrasharp` is applied (which previously re-sharpened the grain back in).
+/// Generates a VapourSynth script that denoises the input at 8-bit depth.
+/// Running BM3D at 16-bit made `sigma` ~1000x too small to do anything; at
+/// 8-bit `sigma = YDIF` is meaningful. Output stays 8-bit and no `contrasharp`
+/// is applied (which previously re-sharpened the grain back in).
 ///
-/// When the BM3DCUDA plugin is installed (vsrepo `bm3dcuda`) the BM3D spatial
-/// pass runs on the GPU (10-50x faster than CPU) with a CPU fallback via the
-/// regular `bm3d` plugin.
+/// The spatial denoiser is chosen per content type (see `DenoiseFilter`):
+/// - BM3D (LiveAction / Rendered): `bm3dcuda` on GPU when the vsrepo plugin is
+///   present (10-50x faster than CPU), CPU fallback via the `bm3d` plugin.
+/// - KNLMeansCL (Animation): preserves lineart, BM3D can damage thin lines.
+///   Falls back to the BM3D path if the `knlm` plugin is missing.
 ///
 /// * `trim`  - optional `(first, last)` frame range for segmented processing.
 /// * `temporal` - also apply a light `SMDegrain(tr=1)` temporal pass afterwards.
+/// * `filter` - spatial denoiser selected by content type.
 pub fn generate_denoise_vpy(
     input: &str,
     fps: f64,
@@ -66,6 +79,7 @@ pub fn generate_denoise_vpy(
     source: DenoiseSource,
     trim: Option<(u64, u64)>,
     temporal: bool,
+    filter: DenoiseFilter,
     vs_threads: usize,
 ) -> String {
     let (fps_num, fps_den) = fps_to_rational(fps);
@@ -102,6 +116,22 @@ pub fn generate_denoise_vpy(
         String::new()
     };
 
+    let spatial_block = match filter {
+        DenoiseFilter::Bm3d => {
+            "if hasattr(core, 'bm3dcuda'):\n\
+             \x20   den = core.resize.Bilinear(src, format=vs.YUV444PS)\n\
+             \x20   den = core.bm3dcuda.BM3D(den, sigma=[SIGMA, SIGMA, SIGMA], radius=0)\n\
+             \x20   den = core.resize.Bilinear(den, format=vs.YUV444P8)\n\
+             else:\n\
+             \x20   den = core.bm3d.Basic(src, sigma=[SIGMA, SIGMA, SIGMA], profile='np')\n"
+                .to_string()
+        }
+        DenoiseFilter::Knlmeans => format!(
+            "KNL = {knl:.2}\nif hasattr(core, 'knlm'):\n    den = core.knlm.KNLMeansCL(src, d=1, a=2, s=4, h=KNL)\nelse:\n    if hasattr(core, 'bm3dcuda'):\n        den = core.resize.Bilinear(src, format=vs.YUV444PS)\n        den = core.bm3dcuda.BM3D(den, sigma=[SIGMA, SIGMA, SIGMA], radius=0)\n        den = core.resize.Bilinear(den, format=vs.YUV444P8)\n    else:\n        den = core.bm3d.Basic(src, sigma=[SIGMA, SIGMA, SIGMA], profile='np')\n",
+            knl = knlmeans_h(sigma),
+        ),
+    };
+
     format!(
         "import sys\n\
          import vapoursynth as vs\n\
@@ -120,12 +150,7 @@ pub fn generate_denoise_vpy(
           src = core.resize.Bilinear(src, format=vs.YUV444P8)\n\
           \n\
           SIGMA = {sigma:.2}\n\
-          if hasattr(core, 'bm3dcuda'):\n\
-          \x20   den = core.resize.Bilinear(src, format=vs.YUV444PS)\n\
-          \x20   den = core.bm3dcuda.BM3D(den, sigma=[SIGMA, SIGMA, SIGMA], radius=0)\n\
-          \x20   den = core.resize.Bilinear(den, format=vs.YUV444P8)\n\
-          else:\n\
-          \x20   den = core.bm3d.Basic(src, sigma=[SIGMA, SIGMA, SIGMA], profile='np')\n\
+          {spatial_block}\
           den = core.fmtc.bitdepth(den, bits=8)\n\
           den = core.resize.Bilinear(den, format=vs.YUV420P8){temporal_block}\
           out = core.fmtc.bitdepth(den, bits=8)\n\

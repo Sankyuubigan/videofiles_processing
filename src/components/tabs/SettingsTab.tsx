@@ -132,36 +132,48 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
           <div className="checkbox-row">
             <input
               type="checkbox"
-              id="denoiseEnabled"
-              checked={localSettings.denoise_enabled}
-              onChange={(e) => autoSave({ ...localSettings, denoise_enabled: e.target.checked })}
-            />
-            <label htmlFor="denoiseEnabled">{t('settings.denoise_enabled')}</label>
-          </div>
-          {localSettings.denoise_enabled && (
-            <div className="value-input">
-              <input
-                type="number"
-                min={0}
-                max={30}
-                step={0.5}
-                value={localSettings.denoise_grain_threshold}
-                onChange={(e) => autoSave({ ...localSettings, denoise_grain_threshold: parseFloat(e.target.value) || 4.0 })}
-              />
-              <span>{t('settings.denoise_grain_threshold_hint')}</span>
-            </div>
-          )}
-        </div>
-        <div className="settings-row">
-          <div className="checkbox-row">
-            <input
-              type="checkbox"
               id="parallelDenoise"
               checked={localSettings.parallel_denoise}
               onChange={(e) => autoSave({ ...localSettings, parallel_denoise: e.target.checked })}
             />
             <label htmlFor="parallelDenoise">{t('settings.parallel_denoise')}</label>
           </div>
+        </div>
+        <div className="settings-row">
+          <label>{t('settings.denoise_threshold_animation')}</label>
+          <input
+            type="number"
+            min={-1}
+            max={30}
+            step={0.5}
+            value={localSettings.denoise_threshold_animation}
+            onChange={(e) => autoSave({ ...localSettings, denoise_threshold_animation: parseFloat(e.target.value) || 4.0 })}
+          />
+        </div>
+        <div className="settings-row">
+          <label>{t('settings.denoise_threshold_liveaction')}</label>
+          <input
+            type="number"
+            min={-1}
+            max={30}
+            step={0.5}
+            value={localSettings.denoise_threshold_liveaction}
+            onChange={(e) => autoSave({ ...localSettings, denoise_threshold_liveaction: parseFloat(e.target.value) || 4.0 })}
+          />
+        </div>
+        <div className="settings-row">
+          <label>{t('settings.denoise_threshold_rendered')}</label>
+          <input
+            type="number"
+            min={-1}
+            max={30}
+            step={0.5}
+            value={localSettings.denoise_threshold_rendered}
+            onChange={(e) => autoSave({ ...localSettings, denoise_threshold_rendered: parseFloat(e.target.value) || 4.0 })}
+          />
+        </div>
+        <div className="settings-row">
+          <span className="hint">{t('settings.denoise_threshold_hint')}</span>
         </div>
         <div className="settings-row">
           <label>{t('settings.denoise_max_threads')}</label>

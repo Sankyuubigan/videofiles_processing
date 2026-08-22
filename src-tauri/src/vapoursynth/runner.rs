@@ -536,6 +536,7 @@ pub fn run_denoise_encode_segmented(
             DenoiseSource::Lsmash,
             Some((*f0, *f1)),
             true,
+            crate::vapoursynth::denoise::DenoiseFilter::for_type(video_type),
             vs_threads,
         );
         if let Err(e) = std::fs::write(vpy, script) {

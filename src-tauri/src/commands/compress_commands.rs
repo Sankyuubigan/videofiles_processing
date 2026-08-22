@@ -5,7 +5,7 @@ use log::{info, error, warn};
 use crate::commands::file_commands::FileQueueState;
 use crate::process_control::{PidRegistry, PidTracker};
 use crate::video_processor::compress::compress_video;
-use crate::vapoursynth::denoise::sigma_from_ydif;
+use crate::vapoursynth::denoise::denoise_sigma_for;
 use crate::vapoursynth::setup::ensure_installed;
 
 pub struct ProcessingState {
@@ -76,11 +76,9 @@ pub async fn start_compress(
         let path = file.path.clone();
         let test_result = file.test_result.clone();
         let settings = crate::settings::load_settings();
-        let denoise_sigma = if settings.denoise_enabled {
-            sigma_from_ydif(file.info.as_ref().and_then(|i| i.grain_ydif), settings.denoise_grain_threshold)
-        } else {
-            None
-        };
+        let denoise_sigma = file.info.as_ref().and_then(|i| {
+            denoise_sigma_for(&settings, &i.video_type, i.grain_ydif)
+        });
         let output_dir = queue_state.output_dir.lock().map_err(|e| {
             let msg = format!("Failed to lock output dir: {}", e);
             error!("{}", msg);
@@ -225,11 +223,9 @@ pub async fn start_batch_compress(
         let path_for_log = path.clone();
         let file_test_result = file.test_result.clone();
         let settings = crate::settings::load_settings();
-        let denoise_sigma = if settings.denoise_enabled {
-            sigma_from_ydif(file.info.as_ref().and_then(|i| i.grain_ydif), settings.denoise_grain_threshold)
-        } else {
-            None
-        };
+        let denoise_sigma = file.info.as_ref().and_then(|i| {
+            denoise_sigma_for(&settings, &i.video_type, i.grain_ydif)
+        });
         let result = tokio::task::spawn_blocking(move || {
             if denoise_sigma.is_some() {
                 if let Err(e) = tauri::async_runtime::block_on(ensure_installed(|_s: String| {})) {
