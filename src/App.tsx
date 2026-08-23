@@ -25,10 +25,10 @@ function App() {
 
   // Editor state
   const [selectedFormat, setSelectedFormat] = useState('mp4');
-  const [selectedCodec, setSelectedCodec] = useState('libx264');
+  const [selectedCodec, setSelectedCodec] = useState('libsvtav1');
   const [useHardware, setUseHardware] = useState(false);
-  const [selectedPreset, setSelectedPreset] = useState('slow');
-  const [crfValue, setCrfValue] = useState(22);
+  const [selectedPreset, setSelectedPreset] = useState('6');
+  const [crfValue, setCrfValue] = useState(26);
   const [autoCrf, setAutoCrf] = useState(true);
   const [targetVmaf, setTargetVmaf] = useState(90.0);
   const [targetSsimulacra2, setTargetSsimulacra2] = useState(68.0);

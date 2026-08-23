@@ -40,6 +40,8 @@ pub struct Settings {
     pub av1_use_content_presets: bool,
     #[serde(default = "default_neg_one")]
     pub av1_film_grain: i32,
+    #[serde(default = "default_false")]
+    pub av1_preserve_film_grain: bool,
 }
 
 fn default_locale() -> String {
@@ -96,6 +98,7 @@ impl Default for Settings {
             denoise_max_segments: 0,
             av1_use_content_presets: true,
             av1_film_grain: -1,
+            av1_preserve_film_grain: false,
         }
     }
 }

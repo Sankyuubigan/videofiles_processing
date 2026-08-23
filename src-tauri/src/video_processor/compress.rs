@@ -111,6 +111,7 @@ pub fn compress_video(
         e
     })?;
     let duration = video_info.duration;
+    let svtav1_lp = Some(crate::av1::av1_lp_for_workers(1));
     if duration <= 0.0 {
         error!("Invalid video duration for {}: {}", input_path, duration);
         return Err("Invalid video duration".to_string());
@@ -131,7 +132,7 @@ pub fn compress_video(
             fps: video_info.fps,
             filter: crate::vapoursynth::denoise::DenoiseFilter::for_type(&video_info.video_type),
         });
-        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix, child_pid.clone(), denoise_arg);
+        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix, child_pid.clone(), denoise_arg, svtav1_lp);
         if acrf.cancelled {
             warn!("Auto CRF cancelled for {}", input_path);
             return Err("Operation cancelled".to_string());
@@ -212,6 +213,7 @@ pub fn compress_video(
         let result = fix_vfr_target_crf(
             input_path, &output_str, output_format, codec, actual_crf,
             preset_value, duration, use_hardware, &video_info, video_type, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+            svtav1_lp,
         );
         if !result.success {
             error!("VFR-fix error for {}: {}", input_path, result.message);
@@ -221,12 +223,14 @@ pub fn compress_video(
         let result = compress_video_core(
             input_path, &output_str, output_format, codec, actual_crf,
             preset_value, duration, &video_info, video_type, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+            svtav1_lp,
         );
         if !result.success {
             warn!("First compress attempt failed for {}, trying without subtitles", input_path);
             let result2 = compress_video_core_no_subtitles(
                 input_path, &output_str, output_format, codec, actual_crf,
                 preset_value, duration, &video_info, video_type, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+                svtav1_lp,
             );
             if !result2.success {
                 warn!("Second compress attempt failed for {}, trying full map", input_path);
@@ -234,6 +238,7 @@ pub fn compress_video(
                 let result3 = compress_video_core_full_map(
                     input_path, &output_str, output_format, codec, actual_crf,
                     preset_value, duration, video_type, video_info.grain_ydif, cancel_flag, final_cb, child_pid.clone(),
+                    svtav1_lp,
                 );
                 if !result3.success {
                     error!("All compress attempts failed for {}: {}", input_path, result3.message);

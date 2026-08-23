@@ -40,7 +40,7 @@ pub fn fix_vfr_only(
         }
     }
 
-    let result = fix_vfr_only_core(input_path, &output_str, video_info.duration, &video_info, cancel_flag, progress_cb, None);
+    let result = fix_vfr_only_core(input_path, &output_str, video_info.duration, &video_info, cancel_flag, progress_cb, None, Some(crate::av1::av1_lp_for_workers(1)));
     if !result.success {
         error!("VFR fix error for {}: {}", input_path, result.message);
         return Err(format!("VFR fix error: {}", result.message));

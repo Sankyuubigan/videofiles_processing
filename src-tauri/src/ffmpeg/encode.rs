@@ -59,21 +59,16 @@ fn svtav1_encode_args(crf_value: i32, preset_value: &str, video_type: &VideoType
 }
 
 /// Для libsvtav1 FFmpeg не пишет Encoded_Library_Settings (в отличие от x264/x265),
-/// поэтому медиаинфо/ffprobe не могут найти CRF в готовом файле. Пишем его сами:
-/// MP4 -> stream tag `EncoderSettings`, MKV/WebM -> format tag `ENCODER_SETTINGS`
-/// (те же ключи, что у libx264, чтобы crf_extractor и mediainfo их распознали).
-pub(crate) fn svtav1_crf_metadata(crf_value: i32, output_format: &str) -> Vec<String> {
-    if output_format == "mkv" || output_format == "webm" {
-        vec![
-            "-metadata".to_string(),
-            format!("ENCODER_SETTINGS=crf={}", crf_value),
-        ]
-    } else {
-        vec![
-            "-metadata:s:v:0".to_string(),
-            format!("EncoderSettings=crf={}", crf_value),
-        ]
-    }
+/// поэтому mediainfo/ffprobe не могут найти CRF в готовом файле. Пишем его сами.
+///
+/// Важно: MP4-муксер ffmpeg отбрасывает нестандартные stream-теги (в т.ч.
+/// `EncoderSettings`), поэтому используем стандартное поле `comment`, которое
+/// сохраняется и читается и mediainfo, и ffprobe во всех контейнерах (mp4/mkv/webm).
+pub(crate) fn svtav1_crf_metadata(crf_value: i32, _output_format: &str) -> Vec<String> {
+    vec![
+        "-metadata".to_string(),
+        format!("comment=crf={}", crf_value),
+    ]
 }
 
 /// Аудио-кодеки: Opus 112k стерео для AV1/VP9 (дока), иначе AAC 192k.
@@ -103,6 +98,7 @@ pub fn fix_vfr_target_crf(
     video_type: &VideoType,
     cancel_flag: Arc<AtomicBool>, progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     child_pid: Option<PidTracker>,
+    svtav1_lp: Option<usize>,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -130,7 +126,7 @@ pub fn fix_vfr_target_crf(
             cmd.extend(["-c:a".to_string(), "copy".to_string()]);
         }
         "libsvtav1" => {
-            cmd.extend(svtav1_encode_args(crf_value, preset_value, video_type, video_info.grain_ydif, None));
+            cmd.extend(svtav1_encode_args(crf_value, preset_value, video_type, video_info.grain_ydif, svtav1_lp));
             cmd.extend(svtav1_crf_metadata(crf_value, output_format));
             cmd.extend(["-c:a".to_string(), "copy".to_string()]);
         }
@@ -174,6 +170,7 @@ pub fn fix_vfr_only_core(
     input_path: &str, output_path: &str, duration_seconds: f64, video_info: &super::probe::VideoInfo,
     cancel_flag: Arc<AtomicBool>, progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     child_pid: Option<PidTracker>,
+    svtav1_lp: Option<usize>,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -213,7 +210,7 @@ pub fn fix_vfr_only_core(
         }
         "libsvtav1" => {
             cmd.extend(["-c:v".to_string(), "libsvtav1".to_string(), "-crf".to_string(), "16".to_string(), "-preset".to_string(), "6".to_string()]);
-            cmd.extend(crate::av1::svtav1_args(&video_info.video_type, video_info.grain_ydif, None));
+            cmd.extend(crate::av1::svtav1_args(&video_info.video_type, video_info.grain_ydif, svtav1_lp));
             let out_fmt = std::path::Path::new(output_path)
                 .extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
             cmd.extend(svtav1_crf_metadata(16, &out_fmt));
@@ -239,6 +236,7 @@ pub fn compress_video_core(
     video_type: &VideoType, use_hardware: bool, cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     child_pid: Option<PidTracker>,
+    svtav1_lp: Option<usize>,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -278,7 +276,7 @@ pub fn compress_video_core(
             if use_hardware {
                 warn!("Hardware encoding is not available for AV1, using software SVT-AV1");
             }
-            cmd.extend(svtav1_encode_args(crf_value, preset_value, video_type, video_info.grain_ydif, None));
+            cmd.extend(svtav1_encode_args(crf_value, preset_value, video_type, video_info.grain_ydif, svtav1_lp));
             cmd.extend(svtav1_crf_metadata(crf_value, output_format));
         }
         _ => {
@@ -314,10 +312,11 @@ pub fn compress_video_core_no_subtitles(
     video_type: &VideoType, use_hardware: bool, cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     child_pid: Option<PidTracker>,
+    svtav1_lp: Option<usize>,
 ) -> RunResult {
     let mut info_clone = video_info.clone();
     info_clone.has_subtitles = false;
-    compress_video_core(input_path, output_path, output_format, codec, crf_value, preset_value, duration_seconds, &info_clone, video_type, use_hardware, cancel_flag, progress_cb, child_pid)
+    compress_video_core(input_path, output_path, output_format, codec, crf_value, preset_value, duration_seconds, &info_clone, video_type, use_hardware, cancel_flag, progress_cb, child_pid, svtav1_lp)
 }
 
 pub fn compress_video_core_full_map(
@@ -326,11 +325,12 @@ pub fn compress_video_core_full_map(
     cancel_flag: Arc<AtomicBool>,
     progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
     child_pid: Option<PidTracker>,
+    svtav1_lp: Option<usize>,
 ) -> RunResult {
     let mut cmd = vec!["ffmpeg".to_string(), "-y".to_string(), "-i".to_string(), input_path.to_string()];
     match codec {
         "libsvtav1" => {
-            cmd.extend(svtav1_encode_args(crf_value, preset_value, video_type, grain_ydif, None));
+            cmd.extend(svtav1_encode_args(crf_value, preset_value, video_type, grain_ydif, svtav1_lp));
             cmd.extend(svtav1_crf_metadata(crf_value, output_format));
         }
         "libvpx-vp9" => cmd.extend([

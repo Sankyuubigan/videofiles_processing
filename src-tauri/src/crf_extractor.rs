@@ -6,6 +6,41 @@ fn crf_regex() -> Regex {
         .expect("CRF regex must compile — this is a programming error")
 }
 
+/// Рекурсивно обходит весь JSON mediainfo и возвращает первый найденный CRF.
+/// Это покрывает любые поля (Encoded_Library_Settings, Comment, extra.ENCODERSETTINGS
+/// и т.д.), включая вложенные объекты, вместо жёсткой проверки одного поля.
+fn search_crf_in_json(value: &serde_json::Value, re: &Regex) -> Option<f64> {
+    match value {
+        serde_json::Value::String(s) => {
+            if let Some(caps) = re.captures(s) {
+                if let Some(m) = caps.get(1) {
+                    if let Ok(v) = m.as_str().parse::<f64>() {
+                        return Some(v);
+                    }
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                if let Some(r) = search_crf_in_json(v, re) {
+                    return Some(r);
+                }
+            }
+            None
+        }
+        serde_json::Value::Object(map) => {
+            for (_k, v) in map {
+                if let Some(r) = search_crf_in_json(v, re) {
+                    return Some(r);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 fn try_mediainfo(file_path: &str) -> Option<f64> {
     let mediainfo_path = crate::settings::get_mediainfo_path();
     if !std::path::Path::new(&mediainfo_path).exists() {
@@ -51,50 +86,16 @@ fn try_mediainfo(file_path: &str) -> Option<f64> {
 
     let re = crf_regex();
 
-    let tracks = match data.get("media")
-        .and_then(|m| m.get("track")).and_then(|t| t.as_array())
-    {
-        Some(t) => t,
-        None => {
-            warn!("mediainfo JSON structure unexpected for {}: no track array found. Keys: {:?}",
-                file_path,
-                data.get("media").map(|m| m.as_object().map(|o| o.keys().collect::<Vec<_>>())).flatten());
-            return None;
+    match search_crf_in_json(&data, &re) {
+        Some(crf) => {
+            debug!("CRF from mediainfo for {}: {}", file_path, crf);
+            Some(crf)
         }
-    };
-
-    for track in tracks {
-        if track.get("@type").and_then(|v| v.as_str()) == Some("Video") {
-            let settings_str = track.get("Encoded_Library_Settings")
-                .or_else(|| track.get("encoding_settings"))
-                .and_then(|v| v.as_str());
-            match settings_str {
-                Some(settings) => {
-                    debug!("mediainfo Encoded_Library_Settings for {}: {}", file_path, settings);
-                    if let Some(caps) = re.captures(settings) {
-                        if let Some(val) = caps.get(1) {
-                            match val.as_str().parse::<f64>() {
-                                Ok(crf) => {
-                                    debug!("CRF from mediainfo for {}: {}", file_path, crf);
-                                    return Some(crf);
-                                }
-                                Err(e) => {
-                                    warn!("CRF parse error '{}' for {}: {}", val.as_str(), file_path, e);
-                                }
-                            }
-                        }
-                    } else {
-                        debug!("CRF pattern not found in Encoded_Library_Settings for {}", file_path);
-                    }
-                }
-                None => {
-                    debug!("No Encoded_Library_Settings in video track for {}", file_path);
-                }
-            }
+        None => {
+            debug!("CRF pattern not found in mediainfo output for {}", file_path);
+            None
         }
     }
-
-    None
 }
 
 fn try_ffprobe_tags(file_path: &str) -> Option<f64> {
@@ -165,4 +166,48 @@ pub fn get_crf_from_file(file_path: &str) -> Option<f64> {
 
     debug!("CRF not found for {}", file_path);
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(json: &str) -> serde_json::Value {
+        serde_json::from_str(json).expect("test json must parse")
+    }
+
+    #[test]
+    fn extracts_crf_from_comment_mp4() {
+        let v = parse(r#"{"media":{"track":[{"@type":"Video","Comment":"crf=40"}]}}"#);
+        let re = crf_regex();
+        assert_eq!(search_crf_in_json(&v, &re), Some(40.0));
+    }
+
+    #[test]
+    fn extracts_crf_from_extra_encoder_settings_mkv() {
+        let v = parse(r#"{"media":{"track":[{"@type":"Video","extra":{"ENCODERSETTINGS":"crf=40"}}]}}"#);
+        let re = crf_regex();
+        assert_eq!(search_crf_in_json(&v, &re), Some(40.0));
+    }
+
+    #[test]
+    fn extracts_crf_from_encoded_library_settings_x264() {
+        let v = parse(r#"{"media":{"track":[{"@type":"Video","Encoded_Library_Settings":"cabac=1:ref=3:crf=23:qcomp=0.6"}]}}"#);
+        let re = crf_regex();
+        assert_eq!(search_crf_in_json(&v, &re), Some(23.0));
+    }
+
+    #[test]
+    fn extracts_crf_from_deeply_nested_field() {
+        let v = parse(r#"{"media":{"track":[{"@type":"Video","foo":{"bar":{"baz":"x264 crf=28 anything"}}}]}}"#);
+        let re = crf_regex();
+        assert_eq!(search_crf_in_json(&v, &re), Some(28.0));
+    }
+
+    #[test]
+    fn returns_none_when_no_crf() {
+        let v = parse(r#"{"media":{"track":[{"@type":"Video","Encoded_Library":"libsvtav1"}]}}"#);
+        let re = crf_regex();
+        assert_eq!(search_crf_in_json(&v, &re), None);
+    }
 }

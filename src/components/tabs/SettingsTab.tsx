@@ -225,6 +225,18 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
           </select>
           <span className="hint">{t('settings.av1_film_grain_hint')}</span>
         </div>
+        <div className="settings-row">
+          <div className="checkbox-row">
+            <input
+              type="checkbox"
+              id="av1PreserveGrain"
+              checked={localSettings.av1_preserve_film_grain}
+              onChange={(e) => autoSave({ ...localSettings, av1_preserve_film_grain: e.target.checked })}
+            />
+            <label htmlFor="av1PreserveGrain">{t('settings.av1_preserve_film_grain')}</label>
+          </div>
+          <span className="hint">{t('settings.av1_preserve_film_grain_hint')}</span>
+        </div>
       </div>
 
       <div className="settings-group">

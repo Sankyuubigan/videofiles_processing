@@ -79,6 +79,7 @@ export interface Settings {
   denoise_max_segments: number;
   av1_use_content_presets: boolean;
   av1_film_grain: number;
+  av1_preserve_film_grain: boolean;
 }
 
 export type Locale = 'en' | 'ru';

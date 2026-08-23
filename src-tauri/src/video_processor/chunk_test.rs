@@ -214,6 +214,7 @@ pub fn find_best_crf(
     force_vfr_fix: bool,
     child_pid: Option<PidTracker>,
     denoise: Option<DenoiseSpec>,
+    svtav1_lp: Option<usize>,
 ) -> AutoCrfResult {
     let settings = crate::settings::load_settings();
     info!("Auto CRF: ignore_noise_for_tests={}", settings.ignore_noise_for_tests);
@@ -300,11 +301,6 @@ pub fn find_best_crf(
         }
     };
     let encode_threads = crate::vapoursynth::runner::denoise_vs_threads_for_workers(denoise_run_workers);
-    let svtav1_lp = if codec == "libsvtav1" {
-        Some(crate::av1::av1_lp_for_workers(denoise_run_workers))
-    } else {
-        None
-    };
     let parallel = timestamps.len() > 1;
 
     let mut best_crf_closest = codec_info.crf_default;
@@ -589,12 +585,13 @@ pub fn run_chunk_test(
     let settings = crate::settings::load_settings();
     let video_info = get_full_video_info(input_path)?;
     let video_type = &video_info.video_type;
+    let svtav1_lp = Some(crate::av1::av1_lp_for_workers(1));
 
     info!("Chunk Test: content type={:?}, ignore_noise_for_tests={}", video_type, settings.ignore_noise_for_tests);
 
     if auto_crf {
         info!("Chunk Test: Auto CRF enabled, target VMAF={}", target_vmaf);
-        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix, child_pid.clone(), denoise.clone());
+        let acrf = find_best_crf(input_path, codec, preset_value, use_hardware, target_vmaf, target_ssimulacra2, cancel_flag.clone(), progress_cb.clone(), force_vfr_fix, child_pid.clone(), denoise.clone(), svtav1_lp);
         if acrf.cancelled {
             return Err("Operation cancelled".to_string());
         }
@@ -668,11 +665,6 @@ pub fn run_chunk_test(
         }
     };
     let encode_threads = crate::vapoursynth::runner::denoise_vs_threads_for_workers(denoise_run_workers);
-    let svtav1_lp = if codec == "libsvtav1" {
-        Some(crate::av1::av1_lp_for_workers(denoise_run_workers))
-    } else {
-        None
-    };
     let parallel = timestamps.len() > 1;
 
     let temp_dir = std::env::temp_dir();

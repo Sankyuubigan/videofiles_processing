@@ -38,7 +38,7 @@ pub const TRIMMED_VIDEO_SUFFIX: &str = "_trimmed";
 pub const EXTRACTED_FRAME_SUFFIX: &str = "_frame";
 pub const DENOISED_VIDEO_SUFFIX: &str = "_denoised";
 
-pub const _DEFAULT_CODEC_KEY: &str = "libx264";
+pub const _DEFAULT_CODEC_KEY: &str = "libsvtav1";
 pub const _DEFAULT_OUTPUT_FORMAT_KEY: &str = "mp4";
 
 #[derive(Debug, Clone)]

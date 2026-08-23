@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS: Settings = {
   denoise_max_segments: 0,
   av1_use_content_presets: true,
   av1_film_grain: -1,
+  av1_preserve_film_grain: false,
 };
 
 export function useSettings() {
