@@ -1,6 +1,6 @@
 [package]
 name = "videofile-pro"
-version = "26.8.1"
+version = "26.9.0"
 description = "VideoFile Pro"
 authors = ["you"]
 edition = "2021"

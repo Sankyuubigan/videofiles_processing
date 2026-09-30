@@ -42,8 +42,8 @@ export const CODECS: Record<string, CodecInfo> = {
 };
 
 export const OUTPUT_FORMATS: Record<string, FormatInfo> = {
-  mp4: { name: 'MP4', compatibleCodecs: ['libx264','libx265','libsvtav1'], audioCodec: 'aac', defaultCodec: 'libsvtav1' },
-  mkv: { name: 'MKV', compatibleCodecs: ['libx264','libx265','libsvtav1'], audioCodec: 'aac', defaultCodec: 'libsvtav1' },
+  mp4: { name: 'MP4', compatibleCodecs: ['libx264','libx265','libsvtav1'], audioCodec: 'aac', defaultCodec: 'libx264' },
+  mkv: { name: 'MKV', compatibleCodecs: ['libx264','libx265','libsvtav1'], audioCodec: 'aac', defaultCodec: 'libx264' },
   hevc: { name: 'HEVC', compatibleCodecs: ['libx265'], audioCodec: 'aac', defaultCodec: 'libx265' },
   webm: { name: 'WebM', compatibleCodecs: ['libvpx-vp9'], audioCodec: 'libopus', defaultCodec: 'libvpx-vp9' },
 };
