@@ -8,6 +8,8 @@ use crate::config::COMPRESSED_VIDEO_SUFFIX;
 use crate::crf_extractor::get_crf_from_file;
 use crate::estimator::estimate_video_complexity;
 use crate::ffmpeg::encode::{compress_video_core, compress_video_core_no_subtitles, compress_video_core_full_map, fix_vfr_target_crf};
+use crate::ffmpeg::encode_parallel::compress_video_parallel;
+use crate::ffmpeg::parallel_plan::should_attempt_fallback;
 use crate::ffmpeg::probe::{get_video_info_raw, VideoInfo};
 use crate::settings::Settings;
 use crate::video_processor::chunk_test::find_best_crf;
@@ -220,29 +222,96 @@ pub fn compress_video(
             return Err(format!("VFR-fix error: {}", result.message));
         }
     } else {
-        let result = compress_video_core(
-            input_path, &output_str, output_format, codec, actual_crf,
-            preset_value, duration, &video_info, video_type, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
-            svtav1_lp,
-        );
-        if !result.success {
-            warn!("First compress attempt failed for {}, trying without subtitles", input_path);
-            let result2 = compress_video_core_no_subtitles(
+        let settings = crate::settings::load_settings();
+        // NVENC не параллелится чанками: сессий GPU обычно 1-4, кодирование уже
+        // упирается в GPU, а не в CPU — параллельность тут только упирается в лимит
+        // сессий и портит mux. Поэтому при use_hardware всегда идёт одиночный путь.
+        let use_parallel = settings.parallel_encode && !use_hardware && duration > 20.0;
+        if settings.parallel_encode && use_hardware {
+            info!("Skipping parallel encode for {} (hardware encoder)", input_path);
+        }
+        let result = if use_parallel {
+            info!("Using parallel encode for {} (duration {:.0}s)", input_path, duration);
+            compress_video_parallel(
+                input_path, &output_str, output_format, codec, actual_crf,
+                preset_value, duration, &video_info, video_type, use_hardware, settings.parallel_workers,
+                cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+            )
+        } else {
+            compress_video_core(
                 input_path, &output_str, output_format, codec, actual_crf,
                 preset_value, duration, &video_info, video_type, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
                 svtav1_lp,
-            );
-            if !result2.success {
-                warn!("Second compress attempt failed for {}, trying full map", input_path);
-                let final_cb = progress_cb.clone();
-                let result3 = compress_video_core_full_map(
+            )
+        };
+        if !result.success {
+            if use_parallel {
+                if !should_attempt_fallback(&result.message, &cancel_flag) {
+                    error!("Parallel compress cancelled or failed for {}: {}", input_path, result.message);
+                    return Err(format!("Compress error: {}", result.message));
+                }
+                warn!("Parallel compress failed for {}, falling back to single-process", input_path);
+                let fallback_result = compress_video_core(
                     input_path, &output_str, output_format, codec, actual_crf,
-                    preset_value, duration, video_type, video_info.grain_ydif, cancel_flag, final_cb, child_pid.clone(),
+                    preset_value, duration, &video_info, video_type, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
                     svtav1_lp,
                 );
-                if !result3.success {
-                    error!("All compress attempts failed for {}: {}", input_path, result3.message);
-                    return Err(format!("Compress error: {}", result3.message));
+                if !fallback_result.success {
+                    if !should_attempt_fallback(&fallback_result.message, &cancel_flag) {
+                        error!("Fallback cancelled or failed for {}: {}", input_path, fallback_result.message);
+                        return Err(format!("Compress error: {}", fallback_result.message));
+                    }
+                    warn!("Fallback also failed for {}, trying without subtitles", input_path);
+                    let result2 = compress_video_core_no_subtitles(
+                        input_path, &output_str, output_format, codec, actual_crf,
+                        preset_value, duration, &video_info, video_type, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+                        svtav1_lp,
+                    );
+                    if !result2.success {
+                        if !should_attempt_fallback(&result2.message, &cancel_flag) {
+                            error!("Second fallback cancelled or failed for {}: {}", input_path, result2.message);
+                            return Err(format!("Compress error: {}", result2.message));
+                        }
+                        warn!("Second fallback failed for {}, trying full map", input_path);
+                        let final_cb = progress_cb.clone();
+                        let result3 = compress_video_core_full_map(
+                            input_path, &output_str, output_format, codec, actual_crf,
+                            preset_value, duration, video_type, video_info.grain_ydif, cancel_flag, final_cb, child_pid.clone(),
+                            svtav1_lp,
+                        );
+                        if !result3.success {
+                            error!("All compress attempts failed for {}: {}", input_path, result3.message);
+                            return Err(format!("Compress error: {}", result3.message));
+                        }
+                    }
+                }
+            } else {
+                if !should_attempt_fallback(&result.message, &cancel_flag) {
+                    error!("Compress cancelled or failed for {}: {}", input_path, result.message);
+                    return Err(format!("Compress error: {}", result.message));
+                }
+                warn!("First compress attempt failed for {}, trying without subtitles", input_path);
+                let result2 = compress_video_core_no_subtitles(
+                    input_path, &output_str, output_format, codec, actual_crf,
+                    preset_value, duration, &video_info, video_type, use_hardware, cancel_flag.clone(), progress_cb.clone(), child_pid.clone(),
+                    svtav1_lp,
+                );
+                if !result2.success {
+                    if !should_attempt_fallback(&result2.message, &cancel_flag) {
+                        error!("Second fallback cancelled or failed for {}: {}", input_path, result2.message);
+                        return Err(format!("Compress error: {}", result2.message));
+                    }
+                    warn!("Second fallback failed for {}, trying full map", input_path);
+                    let final_cb = progress_cb.clone();
+                    let result3 = compress_video_core_full_map(
+                        input_path, &output_str, output_format, codec, actual_crf,
+                        preset_value, duration, video_type, video_info.grain_ydif, cancel_flag, final_cb, child_pid.clone(),
+                        svtav1_lp,
+                    );
+                    if !result3.success {
+                        error!("All compress attempts failed for {}: {}", input_path, result3.message);
+                        return Err(format!("Compress error: {}", result3.message));
+                    }
                 }
             }
         }

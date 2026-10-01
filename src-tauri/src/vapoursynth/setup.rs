@@ -84,11 +84,13 @@ async fn latest_vs_version() -> Result<Option<(String, String)>, String> {
 /// The repo script starts with the *tail* of its `param()` block (the header
 /// is prepended by `make_portable.bat` at release build time):
 ///
+/// ```text
 ///     [string]$TargetFolder = ".\vapoursynth-portable",
 ///     [int]$PythonVersionMajor = 3,
 ///     [int]$PythonVersionMinor = 14,
 ///     [switch]$Unattended
 ///     )
+/// ```
 ///
 /// We remove that orphan block and prepend a complete one, and make output
 /// streamable (Write-Host -> Write-Output).

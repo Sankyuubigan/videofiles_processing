@@ -140,7 +140,7 @@ pub fn run_command_with_progress(
     }
     match wait_result {
         Ok(return_code) => {
-            let full_output = output_log.join("");
+            let full_output = output_log.join("\n");
             if !return_code.success() {
                 let error_summary: Vec<String> = full_output.lines().rev().take(15).map(|s| s.to_string()).collect();
                 let error_detail: Vec<String> = error_lines.into_iter().rev().take(10).collect();
@@ -259,7 +259,7 @@ pub fn run_command_simple(
 
     match child.wait() {
         Ok(return_code) => {
-            let full_output = output_log.join("");
+            let full_output = output_log.join("\n");
             if !return_code.success() {
                 let error_summary: Vec<String> = full_output.lines().rev().take(15).map(|s| s.to_string()).collect();
                 let error_detail: Vec<String> = error_lines.into_iter().rev().take(10).collect();
@@ -423,4 +423,69 @@ pub fn run_ffprobe_json(cmd: &[String]) -> Result<String, String> {
         format!("Failed to start ffprobe: {}", e)
     })?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_progress_out_time_us_zero() {
+        assert_eq!(parse_progress_line("out_time_us=0", 10.0), 0);
+    }
+
+    #[test]
+    fn parse_progress_out_time_us_50_percent() {
+        assert_eq!(parse_progress_line("out_time_us=5000000", 10.0), 50);
+    }
+
+    #[test]
+    fn parse_progress_out_time_us_exact_duration() {
+        assert_eq!(parse_progress_line("out_time_us=10000000", 10.0), 100);
+    }
+
+    #[test]
+    fn parse_progress_out_time_us_exceeds_duration_clamps_to_100() {
+        assert_eq!(parse_progress_line("out_time_us=15000000", 10.0), 100);
+    }
+
+    #[test]
+    fn parse_progress_out_time_us_na() {
+        assert_eq!(parse_progress_line("out_time_us=N/A", 10.0), -1);
+    }
+
+    #[test]
+    fn parse_progress_out_time_us_invalid() {
+        assert_eq!(parse_progress_line("out_time_us=not_a_number", 10.0), -1);
+    }
+
+    #[test]
+    fn parse_progress_end() {
+        assert_eq!(parse_progress_line("progress=end", 10.0), 100);
+    }
+
+    #[test]
+    fn parse_progress_unrecognized_line() {
+        assert_eq!(parse_progress_line("frame=100", 10.0), -1);
+    }
+
+    #[test]
+    fn parse_progress_duration_zero() {
+        assert_eq!(parse_progress_line("out_time_us=5000000", 0.0), -1);
+    }
+
+    #[test]
+    fn parse_progress_duration_negative() {
+        assert_eq!(parse_progress_line("out_time_us=5000000", -1.0), -1);
+    }
+
+    #[test]
+    fn parse_progress_out_time_us_small_value() {
+        assert_eq!(parse_progress_line("out_time_us=100000", 10.0), 1);
+    }
+
+    #[test]
+    fn parse_progress_out_time_us_99_percent() {
+        assert_eq!(parse_progress_line("out_time_us=9900000", 10.0), 99);
+    }
 }

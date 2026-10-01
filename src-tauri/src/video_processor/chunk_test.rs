@@ -1,10 +1,10 @@
-use std::sync::Arc;
+﻿use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use log::{warn, info, error};
 use crate::config::get_codecs;
 use crate::estimator::format_duration;
-use crate::ffmpeg::encode::encode_chunk;
+use crate::ffmpeg::encode::{encode_chunk, needs_x264_pad};
 use crate::ffmpeg::probe::VideoType;
 use crate::process_control::PidTracker;
 use crate::video_processor::compress::get_full_video_info;
@@ -246,8 +246,7 @@ pub fn find_best_crf(
     let vmaf_subsample = settings.vmaf_subsample;
     let chunk_count = settings.chunk_count;
     let chunk_duration = settings.chunk_duration as f64;
-    let needs_fix = force_vfr_fix || video_info.needs_vfr_fix;
-    let pad_applied = codec == "libx264" && !use_hardware && !needs_fix;
+    let pad_applied = needs_x264_pad(codec, use_hardware);
 
     info!("Auto CRF: content type={:?}, using {} metric", video_type,
         match video_type { VideoType::Animation | VideoType::Rendered => "SSIMULACRA2", _ => "VMAF" });
@@ -619,8 +618,7 @@ pub fn run_chunk_test(
     let chunk_count = settings.chunk_count;
     let chunk_duration = settings.chunk_duration as f64;
     let vmaf_subsample = settings.vmaf_subsample;
-    let needs_fix = force_vfr_fix || video_info.needs_vfr_fix;
-    let pad_applied = codec == "libx264" && !use_hardware && !needs_fix;
+    let pad_applied = needs_x264_pad(codec, use_hardware);
 
     let timestamps = if duration < 30.0 {
         vec![(duration * 0.5).round()]

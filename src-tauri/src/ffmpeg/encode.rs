@@ -12,6 +12,16 @@ pub fn chunk_timeline(source_start: f64) -> (f64, f64) {
     (fast_seek, trim_start)
 }
 
+/// Единственный источник правды (SSOT): нужен ли фильтр `pad` для чётных размеров.
+///
+/// libx264 с 8-битным pix_fmt (`yuv420p`) аппаратно требует чётные width/height.
+/// Свойство относится к энкодеру, а не к тайм-линии, поэтому не зависит от VFR-фикса:
+/// проверка должна быть одинаковой в энкодере, в VMAF-эталоне и в финальном mux-е.
+/// Ошибка здесь = рассогласование размеров чанка и эталона -> падение libvmaf.
+pub fn needs_x264_pad(codec: &str, use_hardware: bool) -> bool {
+    codec == "libx264" && !use_hardware
+}
+
 fn get_content_type_flags(video_type: &VideoType, codec: &str, use_hardware: bool, has_nvenc: bool) -> Vec<String> {
     let mut flags = Vec::new();
 
@@ -72,7 +82,9 @@ pub(crate) fn svtav1_crf_metadata(crf_value: i32, _output_format: &str) -> Vec<S
 }
 
 /// Аудио-кодеки: Opus 112k стерео для AV1/VP9 (дока), иначе AAC 192k.
-fn audio_args(codec: &str) -> Vec<String> {
+/// Единственный источник правды (SSOT) для аудио во всех путях сжатия:
+/// одиночный энкод и параллельный mux обязаны давать одинаковый результат.
+pub(crate) fn audio_args(codec: &str) -> Vec<String> {
     if codec == "libsvtav1" || codec == "libvpx-vp9" {
         vec![
             "-c:a".to_string(),
@@ -113,6 +125,9 @@ pub fn fix_vfr_target_crf(
     // Для libsvtav1 битность задаётся через `-pix_fmt yuv420p10le` (av1-модуль).
     if video_info.is_10bit && codec != "libx265" && codec != "libsvtav1" {
         vf_filters.push("format=yuv420p".to_string());
+    }
+    if needs_x264_pad(codec, use_hardware) {
+        vf_filters.push("pad=ceil(iw/2)*2:ceil(ih/2)*2".to_string());
     }
     
     cmd.extend(["-vf".to_string(), vf_filters.join(",")]);
@@ -250,7 +265,7 @@ pub fn compress_video_core(
     if video_info.is_10bit && codec != "libx265" && codec != "libsvtav1" {
         vf_filters.push("format=yuv420p".to_string());
     }
-    if codec == "libx264" && !use_hardware {
+    if needs_x264_pad(codec, use_hardware) {
         vf_filters.push("pad=ceil(iw/2)*2:ceil(ih/2)*2".to_string());
     }
     if !vf_filters.is_empty() {
@@ -351,6 +366,29 @@ pub fn compress_video_core_full_map(
     run_command_with_progress(&cmd, Some(duration_seconds), "Compress (fallback)", cancel_flag, progress_cb, child_pid)
 }
 
+/// Опциональные параметры чанкового кодирования.
+///
+/// Сгруппированы в структуру, а не переданы позиционными аргументами: у позиционных
+/// вариантов легко перепутать местами `None`-ы (их было четыре подряд), а любая
+/// перестановка здесь молча меняет поведение кодирования.
+pub struct ChunkEncodeOptions<'a> {
+    /// Колбэк прогресса. `Some` включает `-progress pipe:1` и чтение stdout.
+    pub progress_cb: Option<Arc<dyn Fn(i32, String) + Send + Sync>>,
+    /// Длительность чанка для расчёта процента прогресса.
+    pub duration_seconds: Option<f64>,
+    /// Доп. параметры x264 (снижают накладные расходы при параллельном кодировании).
+    pub x264_extra_params: Option<&'a str>,
+    /// Число потоков на один чанк. `None` = решение ffmpeg по умолчанию (все ядра),
+    /// что при параллельном кодировании даёт oversubscription по числу чанков.
+    pub threads: Option<usize>,
+}
+
+impl<'a> Default for ChunkEncodeOptions<'a> {
+    fn default() -> Self {
+        Self { progress_cb: None, duration_seconds: None, x264_extra_params: None, threads: None }
+    }
+}
+
 pub fn encode_chunk(
     input_path: &str, output_path: &str, start_time: f64, duration: f64,
     codec: &str, crf_value: i32, preset_value: &str, use_hardware: bool,
@@ -358,6 +396,18 @@ pub fn encode_chunk(
     cancel_flag: Arc<AtomicBool>,
     child_pid: Option<PidTracker>,
     svtav1_lp: Option<usize>,
+) -> RunResult {
+    encode_chunk_with_progress(input_path, output_path, start_time, duration, codec, crf_value, preset_value, use_hardware, video_info, video_type, force_vfr_fix, cancel_flag, child_pid, svtav1_lp, ChunkEncodeOptions::default())
+}
+
+pub fn encode_chunk_with_progress(
+    input_path: &str, output_path: &str, start_time: f64, duration: f64,
+    codec: &str, crf_value: i32, preset_value: &str, use_hardware: bool,
+    video_info: &super::probe::VideoInfo, video_type: &VideoType, force_vfr_fix: bool,
+    cancel_flag: Arc<AtomicBool>,
+    child_pid: Option<PidTracker>,
+    svtav1_lp: Option<usize>,
+    opts: ChunkEncodeOptions,
 ) -> RunResult {
     let gpu_info = get_gpu_info();
     let has_nvenc = gpu_info.contains("NVIDIA NVENC");
@@ -368,7 +418,11 @@ pub fn encode_chunk(
         "ffmpeg".to_string(), "-y".to_string(), 
         "-ss".to_string(), format!("{:.3}", fast_seek), 
         "-i".to_string(), input_path.to_string(),
+        "-t".to_string(), format!("{:.3}", trim_start + duration),
     ];
+    if let Some(threads) = opts.threads {
+        cmd.extend(["-threads".to_string(), threads.to_string()]);
+    }
     
     let needs_fix = force_vfr_fix || video_info.needs_vfr_fix;
     
@@ -383,7 +437,7 @@ pub fn encode_chunk(
     if video_info.is_10bit && codec != "libx265" && codec != "libsvtav1" {
         vf_filters.push("format=yuv420p".to_string());
     }
-    if codec == "libx264" && !use_hardware && !needs_fix {
+    if needs_x264_pad(codec, use_hardware) {
         vf_filters.push("pad=ceil(iw/2)*2:ceil(ih/2)*2".to_string());
     }
     
@@ -416,12 +470,23 @@ pub fn encode_chunk(
             } else {
                 cmd.extend(["-c:v".to_string(), "libx264".to_string(), "-crf".to_string(), crf_value.to_string(), "-preset".to_string(), preset_value.to_string()]);
                 cmd.extend(get_content_type_flags(video_type, codec, use_hardware, has_nvenc));
+                if let Some(extra) = opts.x264_extra_params {
+                    cmd.extend(["-x264-params".to_string(), extra.to_string()]);
+                }
             }
         }
     }
     
-    cmd.extend(["-t".to_string(), duration.to_string(), "-an".to_string(), output_path.to_string()]);
-    run_command_simple(&cmd, cancel_flag, child_pid)
+    cmd.extend(["-an".to_string(), "-sn".to_string()]);
+    if opts.progress_cb.is_some() {
+        cmd.extend(["-progress".to_string(), "pipe:1".to_string()]);
+    }
+    cmd.push(output_path.to_string());
+    if let Some(cb) = opts.progress_cb {
+        run_command_with_progress(&cmd, opts.duration_seconds, "Chunk encode", cancel_flag, Some(cb), child_pid)
+    } else {
+        run_command_simple(&cmd, cancel_flag, child_pid)
+    }
 }
 
 pub fn calculate_vmaf(
@@ -524,4 +589,77 @@ pub fn calculate_vmaf(
         }
     }
     score
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_timeline_at_zero() {
+        let (fast_seek, trim_start) = chunk_timeline(0.0);
+        assert_eq!(fast_seek, 0.0);
+        assert_eq!(trim_start, 0.0);
+    }
+
+    #[test]
+    fn chunk_timeline_below_10_seconds() {
+        let (fast_seek, trim_start) = chunk_timeline(5.0);
+        assert_eq!(fast_seek, 0.0);
+        assert_eq!(trim_start, 5.0);
+    }
+
+    #[test]
+    fn chunk_timeline_exactly_10_seconds() {
+        let (fast_seek, trim_start) = chunk_timeline(10.0);
+        assert_eq!(fast_seek, 0.0);
+        assert_eq!(trim_start, 10.0);
+    }
+
+    #[test]
+    fn chunk_timeline_normal_case() {
+        let (fast_seek, trim_start) = chunk_timeline(100.0);
+        assert_eq!(fast_seek, 90.0);
+        assert_eq!(trim_start, 10.0);
+    }
+
+    #[test]
+    fn chunk_timeline_large_value() {
+        let (fast_seek, trim_start) = chunk_timeline(1000.0);
+        assert_eq!(fast_seek, 990.0);
+        assert_eq!(trim_start, 10.0);
+    }
+
+    #[test]
+    fn chunk_timeline_sum_equals_source_start() {
+        for source_start in [0.0, 5.0, 10.0, 25.0, 100.0, 500.0, 2121.0] {
+            let (fast_seek, trim_start) = chunk_timeline(source_start);
+            assert_eq!(fast_seek + trim_start, source_start,
+                "fast_seek({}) + trim_start({}) should equal source_start({})", fast_seek, trim_start, source_start);
+        }
+    }
+
+    #[test]
+    fn chunk_timeline_negative_not_possible() {
+        for source_start in [0.0, 0.001, 5.0] {
+            let (fast_seek, trim_start) = chunk_timeline(source_start);
+            assert!(fast_seek >= 0.0, "fast_seek should be >= 0, got {}", fast_seek);
+            assert!(trim_start >= 0.0, "trim_start should be >= 0, got {}", trim_start);
+        }
+    }
+
+    #[test]
+    fn chunk_timeline_trim_start_max_10() {
+        for source_start in [10.0, 100.0, 500.0, 2121.0] {
+            let (_, trim_start) = chunk_timeline(source_start);
+            assert!(trim_start <= 10.01, "trim_start should be <= 10, got {} for source_start={}", trim_start, source_start);
+        }
+    }
+
+    #[test]
+    fn chunk_timeline_first_chunk_no_seek() {
+        let (fast_seek, trim_start) = chunk_timeline(0.0);
+        assert_eq!(fast_seek, 0.0);
+        assert_eq!(trim_start, 0.0);
+    }
 }

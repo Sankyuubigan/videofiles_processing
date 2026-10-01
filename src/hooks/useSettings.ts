@@ -22,6 +22,7 @@ const DEFAULT_SETTINGS: Settings = {
   av1_use_content_presets: true,
   av1_film_grain: -1,
   av1_preserve_film_grain: false,
+  parallel_encode: true,
 };
 
 export function useSettings() {

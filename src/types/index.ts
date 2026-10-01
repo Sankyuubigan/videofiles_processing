@@ -80,6 +80,7 @@ export interface Settings {
   av1_use_content_presets: boolean;
   av1_film_grain: number;
   av1_preserve_film_grain: boolean;
+  parallel_encode: boolean;
 }
 
 export type Locale = 'en' | 'ru';

@@ -140,6 +140,18 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
           </div>
         </div>
         <div className="settings-row">
+          <div className="checkbox-row">
+            <input
+              type="checkbox"
+              id="parallelEncode"
+              checked={localSettings.parallel_encode}
+              onChange={(e) => autoSave({ ...localSettings, parallel_encode: e.target.checked })}
+            />
+            <label htmlFor="parallelEncode">{t('settings.parallel_encode')}</label>
+          </div>
+          <span className="hint">{t('settings.parallel_encode_hint')}</span>
+        </div>
+        <div className="settings-row">
           <label>{t('settings.denoise_threshold_animation')}</label>
           <input
             type="number"
@@ -147,7 +159,7 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
             max={30}
             step={0.5}
             value={localSettings.denoise_threshold_animation}
-            onChange={(e) => autoSave({ ...localSettings, denoise_threshold_animation: parseFloat(e.target.value) || 4.0 })}
+            onChange={(e) => { const v = parseFloat(e.target.value); autoSave({ ...localSettings, denoise_threshold_animation: isNaN(v) ? 4.0 : v }) }}
           />
         </div>
         <div className="settings-row">
@@ -158,7 +170,7 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
             max={30}
             step={0.5}
             value={localSettings.denoise_threshold_liveaction}
-            onChange={(e) => autoSave({ ...localSettings, denoise_threshold_liveaction: parseFloat(e.target.value) || 4.0 })}
+            onChange={(e) => { const v = parseFloat(e.target.value); autoSave({ ...localSettings, denoise_threshold_liveaction: isNaN(v) ? 4.0 : v }) }}
           />
         </div>
         <div className="settings-row">
@@ -169,7 +181,7 @@ export default function SettingsTab({ settings, ffmpegExists, onSave, onDownload
             max={30}
             step={0.5}
             value={localSettings.denoise_threshold_rendered}
-            onChange={(e) => autoSave({ ...localSettings, denoise_threshold_rendered: parseFloat(e.target.value) || 4.0 })}
+            onChange={(e) => { const v = parseFloat(e.target.value); autoSave({ ...localSettings, denoise_threshold_rendered: isNaN(v) ? 4.0 : v }) }}
           />
         </div>
         <div className="settings-row">

@@ -85,8 +85,11 @@ export default function OperationTabs(props: Props) {
           </div>
           <div className="op-row">
             <label>CRF:</label>
-            <div className="crf-slider">
-              <span>{codecInfo?.crfMin || 18}</span>
+            <span className="crf-bound">{codecInfo?.crfMin || 18}</span>
+            <div
+              className="crf-slider"
+              style={{ '--progress': `${((props.crfValue - (codecInfo?.crfMin || 18)) / ((codecInfo?.crfMax || 35) - (codecInfo?.crfMin || 18))) * 100}%` } as React.CSSProperties}
+            >
               <input
                 type="range"
                 min={codecInfo?.crfMin || 18}
@@ -95,9 +98,10 @@ export default function OperationTabs(props: Props) {
                 onChange={(e) => props.setCrfValue(parseInt(e.target.value))}
                 disabled={props.autoCrf}
               />
-              <span>{codecInfo?.crfMax || 35}</span>
-              <span className="crf-value">{props.crfValue}</span>
+              <span className="crf-tooltip">{props.crfValue}</span>
             </div>
+            <span className="crf-value">{props.crfValue}</span>
+            <span className="crf-bound">{codecInfo?.crfMax || 35}</span>
           </div>
           <div className="op-row">
             <div className="checkbox-row">

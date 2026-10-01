@@ -49,6 +49,7 @@ pub struct VideoInfo {
     pub video_codec: String,
     pub pixel_format: String,
     pub has_subtitles: bool,
+    pub subtitle_codecs: Vec<String>,
     pub audio_tracks: Vec<AudioTrack>,
     pub gpu_info: String,
     pub processing_mode: String,
@@ -192,6 +193,10 @@ pub fn get_video_info_raw(input_path: &str) -> Result<VideoInfo, String> {
     let video_stream = data.streams.iter().find(|s| s.codec_type == "video");
     let audio_streams: Vec<&ProbeStream> = data.streams.iter().filter(|s| s.codec_type == "audio").collect();
     let has_subtitles = data.streams.iter().any(|s| s.codec_type == "subtitle");
+    let subtitle_codecs: Vec<String> = data.streams.iter()
+        .filter(|s| s.codec_type == "subtitle")
+        .map(|s| s.codec_name.clone())
+        .collect();
 
     if video_stream.is_none() && audio_streams.is_empty() {
         log::error!("No media streams found in {}", input_path);
@@ -280,6 +285,7 @@ pub fn get_video_info_raw(input_path: &str) -> Result<VideoInfo, String> {
         video_codec,
         pixel_format,
         has_subtitles,
+        subtitle_codecs,
         audio_tracks: get_audio_tracks(input_path),
         gpu_info: get_gpu_info(),
         processing_mode: String::new(),
